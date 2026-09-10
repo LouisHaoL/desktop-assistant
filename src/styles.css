@@ -287,19 +287,26 @@ body.view-alt .page,
 body.view-alt #toasts { display: none !important; }
 
 /* ============ 时间轴横条 ============ */
+/* .bar 本身全透明:只有 .bar-head(色带+标签)有底色,
+   下方是弹层空间;鼠标命中由后端按区域控制,透明处不挡桌面 */
 .bar {
   position: fixed;
   inset: 0;
   display: flex;
   flex-direction: column;
-  padding: 2px 4px 0;
-  background: #0009;
-  backdrop-filter: blur(6px);
+  background: transparent;
 }
 html:not([data-theme]) body.view-alt { color-scheme: dark; }
+.bar-head {
+  position: relative;
+  flex: none;
+  padding: 2px 4px 0;
+  background: rgba(10, 12, 18, 0.75);
+  backdrop-filter: blur(6px);
+}
 .bar-strip {
   position: relative;
-  flex: 1;
+  height: 44px; /* 固定高度:弹层展开不再挤压时间轴 */
   border-radius: 6px;
   overflow: hidden;
 }
@@ -389,24 +396,34 @@ html:not([data-theme]) body.view-alt { color-scheme: dark; }
   background: var(--text-dim);
 }
 .pet-status-dot.busy { background: var(--doing); animation: pulse 1.6s infinite; }
-.pet-lock {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 26px;
-  height: 26px;
+/* 桌宠右键菜单(替代原来悬停出现的小锁按钮) */
+.pet-menu {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 6px 20px #0005;
+}
+.pet-menu[hidden] { display: none; }
+.pet-menu button {
   border: none;
-  border-radius: 50%;
-  background: #0000;
-  color: var(--text-dim);
+  background: transparent;
+  color: inherit;
+  font: inherit;
   font-size: 13px;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 7px;
   cursor: pointer;
   pointer-events: auto;
-  opacity: 0;
-  transition: opacity 0.2s;
 }
-.pet-wrap:hover .pet-lock { opacity: 1; }
-.pet-lock.locked { opacity: 1; color: var(--accent); }
+.pet-menu button:hover { background: var(--accent-soft); color: var(--accent); }
 
 /* ============ 空闲弹窗 ============ */
 body.view-alt:has(.prompt) { background: var(--bg); }
@@ -639,7 +656,7 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
 }
 .bar-time {
   position: absolute;
-  top: 34px;
+  top: 28px;
   transform: translateX(-50%);
   font-size: 10px;
   font-weight: 700;
@@ -679,9 +696,9 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
 
 /* ---- 横条:缩放手柄 / 任务操作面板 / 到点 toast ---- */
 .bar-grip {
-  position: fixed;
+  position: absolute;
   right: 2px;
-  bottom: 2px;
+  top: 42px;
   width: 16px;
   height: 16px;
   display: flex;
@@ -745,6 +762,7 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
 .bar-seg-queued { opacity: 0.55; }
 .bar-seg-done {
   opacity: 0.45;
+  filter: grayscale(0.85); /* 完成的任务:灰色遮罩,颜色褪去 */
   background-image: repeating-linear-gradient(
     45deg,
     #0000,
@@ -752,6 +770,25 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
     #ffffff2e 4px,
     #ffffff2e 7px
   );
+}
+/* 穿透(锁定位置)模式:隐藏缩放手柄,拖动也被禁用 */
+.bar.ct .bar-grip { display: none; }
+
+/* 任务池:按天翻页 + 分组标题 */
+.day-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.day-nav #day-label { font-weight: 700; font-size: 14px; }
+.day-group-head {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 8px 2px 4px;
+  border-bottom: 1px dashed var(--line);
+  margin-bottom: 6px;
+  list-style: none;
 }
 
 /* 设置页:空闲提醒一行式 */

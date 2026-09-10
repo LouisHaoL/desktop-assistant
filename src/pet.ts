@@ -25,30 +25,34 @@ export function initPet() {
   root.innerHTML = `
     <div class="pet-wrap" id="pet-wrap">
       <div class="pet-bubble" id="pet-bubble">加载中…</div>
-      <div class="pet-body" id="pet-body" title="按住拖动;单击说话;🔒 可锁定位置">
+      <div class="pet-body" id="pet-body" title="按住拖动;单击说话;右键菜单">
         <span class="pet-emoji" id="pet-emoji">🐱</span>
         <span class="pet-status-dot" id="pet-dot"></span>
       </div>
-      <button class="pet-lock" id="pet-lock" title="锁定 / 解锁拖动">🔓</button>
+      <div class="pet-menu" id="pet-menu" hidden>
+        <button type="button" data-act="lock"></button>
+        <button type="button" data-act="open-main">📋 打开主面板</button>
+      </div>
     </div>`;
 
   const bubble = root.querySelector<HTMLDivElement>("#pet-bubble")!;
   const dot = root.querySelector<HTMLElement>("#pet-dot")!;
   const bodyEl = root.querySelector<HTMLElement>("#pet-body")!;
-  const lockBtn = root.querySelector<HTMLButtonElement>("#pet-lock")!;
+  const menuEl = root.querySelector<HTMLDivElement>("#pet-menu")!;
   let msgIndex = 0;
   let statusText = "";
   let locked = false;
 
-  // ---- 锁定 / 解锁拖动,状态存 settings ----
+  // ---- 锁定 / 解锁拖动,状态存 settings,由右键菜单切换 ----
   async function applyLock() {
     try {
       locked = (await invoke<string | null>("settings_get", { key: "pet_locked" })) === "1";
     } catch {
       locked = false;
     }
-    lockBtn.textContent = locked ? "🔒" : "🔓";
-    lockBtn.classList.toggle("locked", locked);
+    menuEl.querySelector<HTMLButtonElement>('[data-act="lock"]')!.textContent = locked
+      ? "🔓 解锁拖动"
+      : "🔒 锁定位置";
   }
 
   // ---- 手动拖拽:按住移动超过 4px 就开始拖窗口;没移动的算单击(说话) ----
@@ -66,11 +70,39 @@ export function initPet() {
   });
   window.addEventListener("mouseup", () => (downPos = null));
 
-  lockBtn.addEventListener("click", async () => {
-    const locked = lockBtn.classList.contains("locked");
-    await invoke("settings_set", { key: "pet_locked", value: locked ? "0" : "1" });
-    await applyLock();
-    speak(locked ? "可以拖动我啦~" : "我站在这儿不动了");
+  // ---- 右键菜单:锁定/解锁、打开主面板 ----
+  bodyEl.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    menuEl.querySelector<HTMLButtonElement>('[data-act="lock"]')!.textContent = locked
+      ? "🔓 解锁拖动"
+      : "🔒 锁定位置";
+    menuEl.style.left = `${Math.min(e.clientX, window.innerWidth - 160)}px`;
+    menuEl.style.top = `${Math.min(e.clientY + 6, window.innerHeight - 90)}px`;
+    menuEl.hidden = false;
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (menuEl.hidden) return;
+    if (!menuEl.contains(e.target as HTMLElement)) menuEl.hidden = true;
+  });
+  menuEl.addEventListener("click", async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-act]");
+    if (!btn) return;
+    menuEl.hidden = true;
+    if (btn.dataset.act === "lock") {
+      const next = locked ? "0" : "1";
+      await invoke("settings_set", { key: "pet_locked", value: next });
+      locked = next === "1";
+      await applyLock();
+      speak(locked ? "我站在这儿不动了" : "可以拖动我啦~");
+    } else if (btn.dataset.act === "open-main") {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const main = await WebviewWindow.getByLabel("main");
+      if (main) {
+        await main.show();
+        await main.setFocus();
+      }
+    }
   });
 
   // ---- 位置记忆 ----

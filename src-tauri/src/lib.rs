@@ -10,21 +10,32 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
-/// 横条当前是否鼠标穿透(Windows API 无反向查询,自己记账)
+/// 横条当前是否"位置锁定"(旧名穿透;托盘/前端都可调)。
+/// 注意:鼠标是否穿透不再由这个开关直接控制,而是下面的命中区域机制。
 pub struct ClickThrough(pub Mutex<bool>);
 
-/// 横条鼠标穿透开关(托盘和前端都可调)
+/// 横条的鼠标命中区域(逻辑坐标 [x, y, w, h],相对窗口左上角)。
+/// 前端渲染后上报;只有区域内吃点击,其余部分穿透,空白处不挡桌面。
+pub struct HitRegions(pub Mutex<Vec<[f64; 4]>>);
+
+/// 前端上报横条命中区域
+#[tauri::command]
+fn set_bar_hit_regions(
+    regions: Vec<[f64; 4]>,
+    state: tauri::State<HitRegions>,
+) -> Result<(), String> {
+    *state.0.lock().map_err(|e| e.to_string())? = regions;
+    Ok(())
+}
+
+/// 横条鼠标穿透开关(托盘和前端都可调)。
+/// 开 = 锁定位置(不能拖动/缩放);任务色块和弹层仍然可以点(命中区域照常工作)。
 #[tauri::command]
 fn set_click_through(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
     apply_click_through(&app, enable)
 }
 
 fn apply_click_through(app: &tauri::AppHandle, enable: bool) -> Result<(), String> {
-    let win = app
-        .get_webview_window("timeline-bar")
-        .ok_or("找不到时间轴窗口")?;
-    win.set_ignore_cursor_events(enable)
-        .map_err(|e| e.to_string())?;
     if let Some(state) = app.try_state::<ClickThrough>() {
         *state.0.lock().map_err(|e| e.to_string())? = enable;
     }
@@ -40,8 +51,73 @@ fn apply_click_through(app: &tauri::AppHandle, enable: bool) -> Result<(), Strin
     }
     // 横条菜单里切穿透后,托盘勾选要跟着动
     sync_tray_checks(app);
+    // 横条据此显隐缩放手柄、禁用拖动
+    if let Some(bar) = app.get_webview_window("timeline-bar") {
+        use tauri::Emitter;
+        let _ = bar.emit("bar-settings-changed", serde_json::json!({ "click_through": enable }));
+    }
     Ok(())
 }
+
+/// 命中区域监视:每 60ms 查一次光标位置,在区域内窗口可交互,
+/// 区域外(含整窗透明部分)整体穿透。弹层打开时其矩形也在区域内,不会被裁也不会挤压时间轴。
+#[cfg(windows)]
+fn spawn_hit_monitor(app: tauri::AppHandle) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    std::thread::spawn(move || {
+        let mut interactive = false;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let Some(win) = app.get_webview_window("timeline-bar") else {
+                continue;
+            };
+            if !win.is_visible().unwrap_or(false) {
+                if interactive {
+                    let _ = win.set_ignore_cursor_events(true);
+                    interactive = false;
+                }
+                continue;
+            }
+            let (Ok(pos), Ok(sc), Ok(size)) =
+                (win.outer_position(), win.scale_factor(), win.outer_size())
+            else {
+                continue;
+            };
+            let mut pt = POINT { x: 0, y: 0 };
+            unsafe {
+                let _ = GetCursorPos(&mut pt);
+            }
+            let lx = f64::from(pt.x - pos.x) / sc;
+            let ly = f64::from(pt.y - pos.y) / sc;
+            let lw = f64::from(size.width) / sc;
+            let lh = f64::from(size.height) / sc;
+            let inside = lx >= 0.0
+                && ly >= 0.0
+                && lx <= lw
+                && ly <= lh
+                && app
+                    .try_state::<HitRegions>()
+                    .map(|s| {
+                        s.0.lock()
+                            .map(|regions| {
+                                regions
+                                    .iter()
+                                    .any(|r| lx >= r[0] && ly >= r[1] && lx <= r[0] + r[2] && ly <= r[1] + r[3])
+                            })
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+            if inside != interactive {
+                let _ = win.set_ignore_cursor_events(!inside);
+                interactive = inside;
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn spawn_hit_monitor(_app: tauri::AppHandle) {}
 
 fn toggle_bar_visible(app: &tauri::AppHandle) {
     let Some(win) = app.get_webview_window("timeline-bar") else {
@@ -96,13 +172,13 @@ fn read_f(app: &tauri::AppHandle, key: &str) -> Option<f64> {
 fn restore_window_geometry(app: &tauri::AppHandle) {
     if let Some(bar) = app.get_webview_window("timeline-bar") {
         let w = read_f(app, "bar_w");
-        let h = read_f(app, "bar_h");
         let x = read_f(app, "bar_x");
         let y = read_f(app, "bar_y");
-        if let (Some(w), Some(h)) = (w, h) {
-            let _ = bar.set_size(tauri::LogicalSize::new(w.max(320.0), h.max(32.0)));
+        // 高度固定:色带 + 下方透明弹层空间(弹层不再临时改窗口尺寸,时间轴不会变形)
+        if let Some(w) = w {
+            let _ = bar.set_size(tauri::LogicalSize::new(w.max(320.0), 300.0));
         } else if let Ok(Some(monitor)) = bar.primary_monitor() {
-            let _ = bar.set_size(tauri::PhysicalSize::new(monitor.size().width, 56u32));
+            let _ = bar.set_size(tauri::PhysicalSize::new(monitor.size().width, 300u32));
         }
         if let (Some(x), Some(y)) = (x, y) {
             let _ = bar.set_position(tauri::LogicalPosition::new(x, y));
@@ -194,12 +270,6 @@ pub fn run() {
             // 时间轴横条/桌宠:恢复上次的位置和大小
             restore_window_geometry(app.handle());
 
-            // 恢复穿透状态(和托盘勾选、横条行为保持一致)
-            let ct_on = read_setting(app.handle(), "click_through").as_deref() == Some("1");
-            if ct_on {
-                let _ = apply_click_through(app.handle(), true);
-            }
-
             // 主面板点关闭 = 隐藏到托盘
             if let Some(main) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
@@ -231,8 +301,10 @@ pub fn run() {
             task_store::settings_get,
             task_store::settings_set,
             scheduler::timeline_today,
+            scheduler::tasks_for_day,
             llm::llm_chat,
-            set_click_through
+            set_click_through,
+            set_bar_hit_regions
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -241,7 +313,11 @@ pub fn run() {
     app.manage(db);
     app.manage(FiredKeys(Default::default()));
     app.manage(IdlePrompted(Default::default()));
-    app.manage(ClickThrough(Mutex::new(false)));
+    // 穿透(锁定位置)状态从 settings 恢复;鼠标命中由 hit monitor 按区域实时切换
+    let ct_on = read_setting(app.handle(), "click_through").as_deref() == Some("1");
+    app.manage(ClickThrough(Mutex::new(ct_on)));
+    app.manage(HitRegions(Default::default()));
+    spawn_hit_monitor(app.handle().clone());
 
     app.run(|_app, _event| {});
 }

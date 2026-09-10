@@ -241,6 +241,14 @@ pub fn task_start(db: tauri::State<Db>, id: i64, source: String) -> Result<i64, 
         params![id],
     )
     .map_err(|e| e.to_string())?;
+    // 同一任务只允许一条打开中的执行记录:旧的没收尾就补一个结束时间,
+    // 否则时间轴会按每条 log 各画一个色块(历史 bug 根源)
+    tx.execute(
+        "UPDATE task_logs SET ended_at=?1
+         WHERE task_id=?2 AND ended_at IS NULL",
+        params![now, id],
+    )
+    .map_err(|e| e.to_string())?;
     tx.execute(
         "INSERT INTO task_logs (task_id, started_at, source) VALUES (?1, ?2, ?3)",
         params![id, now, source],

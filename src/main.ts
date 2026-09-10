@@ -65,6 +65,25 @@ const emptyEl = document.querySelector<HTMLElement>("#empty-hint")!;
 
 let openLog: { taskId: number; logId: number } | null = null;
 
+// 任务池按天查看:默认今天,◀ ▶ 翻日期
+function toDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+let viewDate = toDateStr(new Date());
+
+function updateDayLabel() {
+  const el = document.querySelector<HTMLElement>("#day-label")!;
+  const d = new Date(`${viewDate}T00:00:00`);
+  const week = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
+  el.textContent =
+    viewDate === toDateStr(new Date())
+      ? `今天 ${viewDate} 周${week}`
+      : `${viewDate} 周${week}`;
+}
+
 function switchTab(tab: string) {
   document.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === tab)
@@ -89,65 +108,86 @@ async function refresh() {
   }
   bannerEl.hidden = !doing;
   doingNameEl.textContent = doing?.name ?? "";
-  emptyEl.hidden = tasks.length > 0;
+
+  // 当天视图:周期任务(当天有发生点)+ 一次性任务(当天到期);未定时间的始终可见
+  const dayTasks = await invoke<Task[]>("tasks_for_day", { date: viewDate }).catch(() => []);
+  const undated = dayTasks.filter(
+    (t) => t.kind === "recurring" ? !t.cron : !t.once_due
+  );
+  const scheduled = dayTasks.filter((t) => !undated.includes(t));
+  emptyEl.hidden = dayTasks.length > 0;
 
   listEl.innerHTML = "";
-  for (const t of tasks) {
-    const li = document.createElement("li");
-    li.className = `task task-${t.status}`;
-
-    // 状态徽章放最前面
-    const badge = document.createElement("span");
-    badge.className = `badge badge-status${
-      t.status === "doing" ? " badge-doing" : t.status === "done" ? " badge-done" : " badge-todo"
-    }`;
-    badge.textContent =
-      t.status === "done"
-        ? "✓ 已完成"
-        : t.status === "doing"
-          ? "● 进行中"
-          : t.status === "skipped"
-            ? "已跳过"
-            : "待办";
-
-    const name = document.createElement("span");
-    name.className = "name";
-    name.textContent = t.name;
-    name.onclick = () => showDetail(t);
-
-    const detail = document.createElement("span");
-    detail.className = "detail";
-    const when =
-      t.kind === "recurring"
-        ? `周期 · cron ${t.cron}`
-        : t.once_due
-          ? `一次性 · ${new Date(t.once_due).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}`
-          : "一次性 · 未定时间";
-    detail.textContent = `${when}${t.estimated_minutes ? ` · 约 ${t.estimated_minutes} 分钟` : ""}`;
-
-    li.append(badge, name, detail);
-
-    if (t.status === "todo") {
-      const startBtn = document.createElement("button");
-      startBtn.textContent = "开始";
-      startBtn.onclick = async () => {
-        await invoke("task_start", { id: t.id, source: "user" });
-        await refresh();
-      };
-      li.append(startBtn);
-    }
-    if (t.status !== "done") {
-      const delBtn = document.createElement("button");
-      delBtn.textContent = "删除";
-      delBtn.className = "danger";
-      delBtn.onclick = async () => {
-        await invoke("task_delete", { id: t.id });
-        await refresh();
-      };
-      li.append(delBtn);
-    }
-    listEl.append(li);
+  if (undated.length > 0) {
+    const head = document.createElement("li");
+    head.className = "day-group-head";
+    head.textContent = "未安排时间(常驻)";
+    listEl.append(head);
+    for (const t of undated) renderTaskRow(t);
+    const head2 = document.createElement("li");
+    head2.className = "day-group-head";
+    head2.textContent = "当天安排";
+    listEl.append(head2);
   }
+  for (const t of scheduled) renderTaskRow(t);
+  if (dayTasks.length === 0) return;
+}
+
+function renderTaskRow(t: Task) {
+  const li = document.createElement("li");
+  li.className = `task task-${t.status}`;
+
+  // 状态徽章放最前面
+  const badge = document.createElement("span");
+  badge.className = `badge badge-status${
+    t.status === "doing" ? " badge-doing" : t.status === "done" ? " badge-done" : " badge-todo"
+  }`;
+  badge.textContent =
+    t.status === "done"
+      ? "✓ 已完成"
+      : t.status === "doing"
+        ? "● 进行中"
+        : t.status === "skipped"
+          ? "已跳过"
+          : "待办";
+
+  const name = document.createElement("span");
+  name.className = "name";
+  name.textContent = t.name;
+  name.onclick = () => showDetail(t);
+
+  const detail = document.createElement("span");
+  detail.className = "detail";
+  const when =
+    t.kind === "recurring"
+      ? `周期 · cron ${t.cron}`
+      : t.once_due
+        ? `一次性 · ${new Date(t.once_due).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}`
+        : "一次性 · 未定时间";
+  detail.textContent = `${when}${t.estimated_minutes ? ` · 约 ${t.estimated_minutes} 分钟` : ""}`;
+
+  li.append(badge, name, detail);
+
+  if (t.status === "todo") {
+    const startBtn = document.createElement("button");
+    startBtn.textContent = "开始";
+    startBtn.onclick = async () => {
+      await invoke("task_start", { id: t.id, source: "user" });
+      await refresh();
+    };
+    li.append(startBtn);
+  }
+  if (t.status !== "done") {
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "删除";
+    delBtn.className = "danger";
+    delBtn.onclick = async () => {
+      await invoke("task_delete", { id: t.id });
+      await refresh();
+    };
+    li.append(delBtn);
+  }
+  listEl.append(li);
 }
 
 // ============ 任务详情弹窗 ============
@@ -571,6 +611,28 @@ if (label === "timeline-bar") {
   document.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) =>
     b.addEventListener("click", () => switchTab(b.dataset.tab!))
   );
+
+  // 按天翻页
+  document.querySelector("#day-prev")!.addEventListener("click", () => {
+    const d = new Date(`${viewDate}T00:00:00`);
+    d.setDate(d.getDate() - 1);
+    viewDate = toDateStr(d);
+    updateDayLabel();
+    void refresh();
+  });
+  document.querySelector("#day-next")!.addEventListener("click", () => {
+    const d = new Date(`${viewDate}T00:00:00`);
+    d.setDate(d.getDate() + 1);
+    viewDate = toDateStr(d);
+    updateDayLabel();
+    void refresh();
+  });
+  document.querySelector("#day-today")!.addEventListener("click", () => {
+    viewDate = toDateStr(new Date());
+    updateDayLabel();
+    void refresh();
+  });
+  updateDayLabel();
 
   document.querySelector("#btn-finish")?.addEventListener("click", async () => {
     if (!openLog) return;

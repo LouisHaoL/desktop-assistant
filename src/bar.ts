@@ -29,14 +29,20 @@ interface TaskRow {
 }
 
 const COLORS = ["#4f6ef7", "#18a05e", "#e58f2a", "#b45be1", "#2ab5a5", "#e5484d", "#7a6ff0", "#0ea5e9"];
-const LANES = 4;
 const MINUTES_PER_DAY = 1440;
-const EXPAND_H = 300; // 弹出菜单/操作面板时临时加高的窗口高度
+
+// 窗口高度固定:上面是时间轴色带,下面是透明弹层空间——
+// 弹层(右键菜单/任务面板)在这块空间里展开,不改窗口尺寸,时间轴永不变形
+const WINDOW_H = 300;
+const LANES = 4;
+const LANE_TOP = 4;
+const LANE_GAP = 10;
+const SEG_H = 8;
 
 const WIN = getCurrentWindow();
 
 function hhmm(minute: number): string {
-  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+  return `${String(Math.floor(minute / 60) % 24).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 }
 
 export function initBar() {
@@ -44,16 +50,19 @@ export function initBar() {
   root.hidden = false;
   root.innerHTML = `
     <div class="bar" id="bar-root">
-      <div class="bar-strip" id="bar-strip">
-        <div class="bar-ticks" id="bar-ticks"></div>
-        <div class="bar-now" id="bar-now"></div>
+      <div class="bar-head">
+        <div class="bar-strip" id="bar-strip">
+          <div class="bar-ticks" id="bar-ticks"></div>
+          <div class="bar-now" id="bar-now"></div>
+        </div>
+        <div class="bar-labels" id="bar-labels"></div>
+        <div class="bar-time" id="bar-time"></div>
+        <div class="bar-grip" id="bar-grip" title="拖动缩放宽度和高度">◢</div>
       </div>
-      <div class="bar-labels" id="bar-labels"></div>
-      <div class="bar-time" id="bar-time"></div>
-      <div class="bar-grip" id="bar-grip" title="拖动缩放">◢</div>
       <div class="bar-toast" id="bar-toast" hidden></div>
       <div class="bar-pop" id="bar-menu" hidden>
-        <button type="button" data-act="click-through">🖱 鼠标穿透(在托盘菜单里取消)</button>
+        <button type="button" data-act="click-through"></button>
+        <button type="button" data-act="view-mode"></button>
         <button type="button" data-act="open-main">📋 打开主面板</button>
         <button type="button" data-act="hide-bar">✕ 隐藏横条(托盘里恢复)</button>
       </div>
@@ -69,63 +78,104 @@ export function initBar() {
   const panelEl = root.querySelector<HTMLDivElement>("#bar-panel")!;
   const barRoot = root.querySelector<HTMLDivElement>("#bar-root")!;
 
-  // 整点刻度线 + 标签
-  const ticks = root.querySelector<HTMLDivElement>("#bar-ticks")!;
-  const labels = root.querySelector<HTMLDivElement>("#bar-labels")!;
-  for (let h = 1; h < 24; h++) {
-    const t = document.createElement("div");
-    t.className = "bar-tick";
-    if (h % 6 === 0) t.classList.add("major");
-    t.style.left = `${(h / 24) * 100}%`;
-    ticks.append(t);
-    const label = document.createElement("span");
-    label.style.position = "absolute";
-    label.style.left = `${(h / 24) * 100}%`;
-    label.textContent = String(h);
-    labels.append(label);
+  // ---- 视图范围:全天 0-24,半天只看当前上/下午(块更大) ----
+  let viewMode: "full" | "half" = "full";
+  let viewStart = 0;
+  let viewEnd = MINUTES_PER_DAY;
+
+  function applyViewRange() {
+    if (viewMode === "half") {
+      const now = nowMinute();
+      if (now < 720) {
+        viewStart = 0;
+        viewEnd = 720;
+      } else {
+        viewStart = 720;
+        viewEnd = MINUTES_PER_DAY;
+      }
+    } else {
+      viewStart = 0;
+      viewEnd = MINUTES_PER_DAY;
+    }
   }
-  const zero = document.createElement("span");
-  zero.style.position = "absolute";
-  zero.style.left = "0";
-  zero.textContent = "0";
-  labels.append(zero);
+
+  function nowMinute(): number {
+    const n = new Date();
+    return n.getHours() * 60 + n.getMinutes();
+  }
 
   function colorFor(id: number): string {
     return COLORS[id % COLORS.length];
   }
 
-  // ---- 窗口高度:平时 baseH,弹菜单时临时加高(菜单原来被 56px 窗口裁掉) ----
-  let baseW = 1200;
-  let baseH = 56;
-  let expanded = false;
-
-  async function syncBaseSize() {
-    const sc = await WIN.scaleFactor();
-    const s = await WIN.innerSize();
-    baseW = Math.max(320, Math.round(s.width / sc));
-    baseH = Math.max(56, Math.round(s.height / sc));
+  // ---- 命中区域:把这些矩形报给 Rust,区域内可点、其余穿透 ----
+  async function updateRegions() {
+    const regions: [number, number, number, number][] = [];
+    const push = (el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) regions.push([r.left, r.top, r.width, r.height]);
+    };
+    push(strip);
+    if (!ct) push(gripEl);
+    if (!menuEl.hidden) push(menuEl);
+    if (!panelEl.hidden) push(panelEl);
+    try {
+      await invoke("set_bar_hit_regions", { regions });
+    } catch {
+      /* 后端未就绪时下轮渲染再报 */
+    }
   }
 
-  async function expandWindow() {
-    if (expanded) return;
-    expanded = true;
-    await syncBaseSize();
-    await WIN.setSize(new LogicalSize(baseW, EXPAND_H));
+  // ---- 穿透(锁定位置)状态 ----
+  let ct = false;
+  async function refreshCt() {
+    try {
+      ct = (await invoke<string | null>("settings_get", { key: "click_through" })) === "1";
+    } catch {
+      ct = false;
+    }
+    barRoot.classList.toggle("ct", ct);
+    menuEl.querySelector<HTMLButtonElement>('[data-act="click-through"]')!.textContent = ct
+      ? "🔓 解除穿透(允许拖动)"
+      : "🖱 鼠标穿透(锁定位置)";
+    void updateRegions();
   }
 
-  async function collapseWindow() {
-    if (!expanded) return;
-    expanded = false;
-    await WIN.setSize(new LogicalSize(baseW, baseH));
+  // ---- 刻度与标签(随视图范围变化) ----
+  const ticks = root.querySelector<HTMLDivElement>("#bar-ticks")!;
+  const labels = root.querySelector<HTMLDivElement>("#bar-labels")!;
+  function renderScale() {
+    const span = viewEnd - viewStart;
+    ticks.innerHTML = "";
+    labels.innerHTML = "";
+    for (let m = viewStart; m <= viewEnd; m += 60) {
+      const h = m / 60;
+      if (h === 0 || h === 24) continue; // 0 点和 24 点重合,只画一次
+      const t = document.createElement("div");
+      t.className = "bar-tick";
+      if (h % 6 === 0) t.classList.add("major");
+      t.style.left = `${((m - viewStart) / span) * 100}%`;
+      ticks.append(t);
+      const label = document.createElement("span");
+      label.style.position = "absolute";
+      label.style.left = `${((m - viewStart) / span) * 100}%`;
+      label.textContent = String(h % 24);
+      labels.append(label);
+    }
+    const zero = document.createElement("span");
+    zero.style.position = "absolute";
+    zero.style.left = "0";
+    zero.textContent = String(viewStart / 60);
+    labels.append(zero);
   }
 
   function closePops() {
     menuEl.hidden = true;
     panelEl.hidden = true;
-    void collapseWindow();
+    void updateRegions();
   }
 
-  // 位置/尺寸写回 settings(节流)
+  // ---- 位置/尺寸写回 settings(节流) ----
   let saveTimer: number | undefined;
   async function saveGeometry(what: "pos" | "size") {
     clearTimeout(saveTimer);
@@ -137,9 +187,9 @@ export function initBar() {
           await invoke("settings_set", { key: "bar_x", value: String(Math.round(p.x / sc)) });
           await invoke("settings_set", { key: "bar_y", value: String(Math.round(p.y / sc)) });
         } else {
-          await syncBaseSize();
-          await invoke("settings_set", { key: "bar_w", value: String(baseW) });
-          await invoke("settings_set", { key: "bar_h", value: String(baseH) });
+          const s = await WIN.innerSize();
+          const sc = await WIN.scaleFactor();
+          await invoke("settings_set", { key: "bar_w", value: String(Math.max(320, Math.round(s.width / sc))) });
         }
       } catch {
         /* 存不上就下次还用默认布局 */
@@ -149,29 +199,30 @@ export function initBar() {
 
   void WIN.onMoved(() => saveGeometry("pos"));
 
-  // 拖动移动窗口:按住空白处(非任务段/菜单/grip)即可拖
+  // 拖动移动窗口:按住色带空白处即可拖(穿透模式下锁定)
   barRoot.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || ct) return;
     const t = e.target as HTMLElement;
     if (t.closest(".bar-seg, .bar-pop, .bar-grip, .bar-time")) return;
     void WIN.startDragging();
   });
 
-  // 右下角 grip 拖动缩放
+  // 右下角 grip 拖动缩放(穿透模式下锁定)
   gripEl.addEventListener("mousedown", (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (ct) return;
     void (async () => {
-      if (expanded) await collapseWindow();
-      await syncBaseSize();
+      const s = await WIN.innerSize();
+      const sc = await WIN.scaleFactor();
       const sx = e.clientX;
       const sy = e.clientY;
-      const sw = baseW;
-      const sh = baseH;
+      const sw = s.width / sc;
+      const sh = s.height / sc;
       const onMove = (ev: MouseEvent) => {
-        baseW = Math.max(360, sw + ev.clientX - sx);
-        baseH = Math.max(56, sh + ev.clientY - sy);
-        void WIN.setSize(new LogicalSize(baseW, baseH));
+        const w = Math.max(360, sw + ev.clientX - sx);
+        const h = Math.max(120, Math.min(WINDOW_H, sh + ev.clientY - sy));
+        void WIN.setSize(new LogicalSize(w, h));
       };
       const onUp = () => {
         document.removeEventListener("mousemove", onMove);
@@ -188,14 +239,17 @@ export function initBar() {
     try {
       const v = await invoke<string | null>("settings_get", { key: "timeline_opacity" });
       const alpha = v ? Number(v) / 100 : 0.75;
-      barRoot.style.background = `rgba(10, 12, 18, ${alpha})`;
+      const head = barRoot.querySelector<HTMLElement>(".bar-head")!;
+      head.style.background = `rgba(10, 12, 18, ${alpha})`;
     } catch {
       /* 用默认 */
     }
   }
 
-  // ---- 渲染时间轴:所有任务(固定位置 + 从当前时间往后排) ----
+  // ---- 渲染时间轴:当天所有任务(固定位置 + 从当前时间往后排) ----
   async function render() {
+    if (viewMode === "half") applyViewRange();
+    renderScale();
     let occ: Occurrence[] = [];
     try {
       occ = await invoke<Occurrence[]>("timeline_today");
@@ -204,9 +258,17 @@ export function initBar() {
     }
     strip.querySelectorAll(".bar-seg").forEach((el) => el.remove());
 
+    const span = viewEnd - viewStart;
+    const pct = (minute: number) => ((minute - viewStart) / span) * 100;
+
     // 固定位置优先占泳道,再放排队的
     const laneEnds = Array(LANES).fill(-1);
     for (const o of occ) {
+      // 视图范围外的整段不画,越界的裁剪
+      const segEnd = o.start_minute + o.duration_minutes;
+      if (segEnd <= viewStart || o.start_minute >= viewEnd) continue;
+      const left = Math.max(pct(o.start_minute), 0);
+      const right = Math.min(pct(segEnd), 100);
       const lane = laneEnds.findIndex((end) => end <= o.start_minute);
       if (lane === -1) continue; // 放不下的直接不画
       laneEnds[lane] = o.start_minute + o.duration_minutes;
@@ -218,12 +280,13 @@ export function initBar() {
           ? " bar-seg-queued"
           : ""
       }`;
-      seg.style.left = `${(o.start_minute / MINUTES_PER_DAY) * 100}%`;
-      seg.style.width = `${Math.max((o.duration_minutes / MINUTES_PER_DAY) * 100, 0.4)}%`;
-      seg.style.top = `${4 + lane * 11}px`;
+      seg.style.left = `${left}%`;
+      seg.style.width = `${Math.max(right - left, 0.4)}%`;
+      seg.style.top = `${LANE_TOP + lane * LANE_GAP}px`;
+      seg.style.height = `${SEG_H}px`;
       seg.style.background = colorFor(o.task_id);
       seg.title = `${o.name} · ${hhmm(o.start_minute)}(约 ${o.duration_minutes} 分钟)${
-        o.status === "doing" ? " · 进行中" : " · 点击操作"
+        o.status === "doing" ? " · 进行中" : o.status === "done" ? " · 已完成" : " · 点击操作"
       }`;
       seg.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -232,17 +295,21 @@ export function initBar() {
       strip.append(seg);
     }
     updateNow();
-  }
-
-  function nowMinute(): number {
-    const n = new Date();
-    return n.getHours() * 60 + n.getMinutes();
+    void updateRegions();
   }
 
   function updateNow() {
     const minutes = nowMinute();
-    nowEl.style.left = `${(minutes / MINUTES_PER_DAY) * 100}%`;
-    timeEl.style.left = `${(minutes / MINUTES_PER_DAY) * 100}%`;
+    if (minutes < viewStart || minutes > viewEnd) {
+      nowEl.style.display = "none";
+      timeEl.style.display = "none";
+      return;
+    }
+    nowEl.style.display = "";
+    timeEl.style.display = "";
+    const span = viewEnd - viewStart;
+    nowEl.style.left = `${((minutes - viewStart) / span) * 100}%`;
+    timeEl.style.left = `${((minutes - viewStart) / span) * 100}%`;
     timeEl.textContent = new Date().toLocaleTimeString("zh-CN", {
       hour: "2-digit",
       minute: "2-digit",
@@ -250,25 +317,39 @@ export function initBar() {
     });
   }
 
-  // ---- 任务快捷操作面板 ----
+  // ---- 任务快捷操作面板(打开时重新查库,状态和任务池保持一致) ----
   async function openTaskPanel(o: Occurrence) {
     menuEl.hidden = true;
-    await expandWindow();
+    // 重新取任务和打开中的执行记录,不用时间轴上的旧状态
+    let fresh: TaskRow | undefined;
+    let doingLogId: number | null = o.doingLogId;
+    try {
+      const tasks = await invoke<TaskRow[]>("task_list");
+      fresh = tasks.find((x) => x.id === o.task_id);
+      const logs = await invoke<{ id: number; ended_at: string | null }[]>("task_logs_for", {
+        taskId: o.task_id,
+      });
+      doingLogId = logs.find((l) => !l.ended_at)?.id ?? null;
+    } catch {
+      /* 取不到就用时间轴上的数据 */
+    }
+    const status = fresh?.status ?? o.status;
+    const name = fresh?.name ?? o.name;
+
     panelEl.innerHTML = `
       <div class="bar-panel-title"></div>
       <div class="bar-panel-meta"></div>
       <div class="bar-panel-actions"></div>`;
-    panelEl.querySelector<HTMLElement>(".bar-panel-title")!.textContent = o.name;
+    panelEl.querySelector<HTMLElement>(".bar-panel-title")!.textContent = name;
     panelEl.querySelector<HTMLElement>(".bar-panel-meta")!.textContent =
       `${hhmm(o.start_minute)} - ${hhmm(o.start_minute + o.duration_minutes)} · 约 ${o.duration_minutes} 分钟` +
-      (o.status === "doing" ? " · 进行中" : o.status === "done" ? " · 已完成" : "");
+      (status === "doing" ? " · 进行中" : status === "done" ? " · 已完成" : " · 待办");
     const actions = panelEl.querySelector<HTMLElement>(".bar-panel-actions")!;
 
-    const setStatus = async (status: string) => {
-      const tasks = await invoke<TaskRow[]>("task_list");
-      const t = tasks.find((x) => x.id === o.task_id);
+    const setStatus = async (newStatus: string) => {
+      const t = fresh ?? (await invoke<TaskRow[]>("task_list")).find((x) => x.id === o.task_id);
       if (!t) throw new Error("任务不存在");
-      await invoke("task_update", { task: { ...t, status } });
+      await invoke("task_update", { task: { ...t, status: newStatus } });
     };
 
     const mkBtn = (text: string, fn: () => Promise<void>, danger = false) => {
@@ -289,22 +370,22 @@ export function initBar() {
       actions.append(b);
     };
 
-    if (o.status === "done") {
+    if (status === "done") {
       mkBtn("↩ 恢复为待办", async () => {
         await setStatus("todo");
       });
     } else {
-      if (o.status !== "doing") {
+      if (status !== "doing") {
         mkBtn("▶ 开始", async () => {
           await invoke("task_start", { id: o.task_id, source: "user" });
         });
       }
-      if (o.doingLogId != null) {
+      if (doingLogId != null) {
         mkBtn("⏸ 暂停", async () => {
-          await invoke("task_pause", { logId: o.doingLogId });
+          await invoke("task_pause", { logId: doingLogId });
         });
         mkBtn("✓ 完成", async () => {
-          await invoke("task_finish", { logId: o.doingLogId });
+          await invoke("task_finish", { logId: doingLogId });
         });
       } else {
         // 没开始也可以直接标记完成
@@ -317,23 +398,23 @@ export function initBar() {
         );
       }
     }
-    panelEl.hidden = false;
-    // 面板贴着点击位置,尽量不出窗
+    // 面板贴着点击位置,放在色带下方的透明空间里,不影响时间轴布局
     panelEl.style.left = "12px";
-    panelEl.style.top = "64px";
+    panelEl.style.top = "70px";
+    panelEl.hidden = false;
+    void updateRegions();
   }
 
   // ---- 右键菜单 ----
   barRoot.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     panelEl.hidden = true;
-    void expandWindow().then(() => {
-      const x = Math.min(e.clientX, window.innerWidth - 210);
-      const y = Math.min(e.clientY + 8, window.innerHeight - 120);
-      menuEl.style.left = `${x}px`;
-      menuEl.style.top = `${y}px`;
-      menuEl.hidden = false;
-    });
+    const x = Math.min(e.clientX, window.innerWidth - 210);
+    const y = Math.min(e.clientY + 8, window.innerHeight - 150);
+    menuEl.style.left = `${x}px`;
+    menuEl.style.top = `${y}px`;
+    menuEl.hidden = false;
+    void updateRegions();
   });
   document.addEventListener("mousedown", (e) => {
     if (menuEl.hidden && panelEl.hidden) return;
@@ -343,21 +424,33 @@ export function initBar() {
   menuEl.addEventListener("click", async (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-act]");
     if (!btn) return;
+    const act = btn.dataset.act;
     closePops();
-    if (btn.dataset.act === "click-through") {
-      await invoke("set_click_through", { enable: true });
-    } else if (btn.dataset.act === "open-main") {
+    if (act === "click-through") {
+      await invoke("set_click_through", { enable: !ct });
+      await refreshCt();
+    } else if (act === "view-mode") {
+      viewMode = viewMode === "full" ? "half" : "full";
+      await invoke("settings_set", { key: "bar_view_mode", value: viewMode }).catch(() => {});
+      updateModeBtn();
+      void render();
+    } else if (act === "open-main") {
       const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const main = await WebviewWindow.getByLabel("main");
       if (main) {
         await main.show();
         await main.setFocus();
       }
-    } else if (btn.dataset.act === "hide-bar") {
-      await collapseWindow();
+    } else if (act === "hide-bar") {
       await WIN.hide();
     }
   });
+
+  function updateModeBtn() {
+    menuEl.querySelector<HTMLButtonElement>('[data-act="view-mode"]')!.textContent = `⏱ 视图:${
+      viewMode === "full" ? "全天" : "半天"
+    }(点击切换)`;
+  }
 
   // ---- 到点提醒:横条上也要看得见(系统通知可能被吞) ----
   let toastTimer: number | undefined;
@@ -365,15 +458,34 @@ export function initBar() {
     toastEl.textContent = text;
     toastEl.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => (toastEl.hidden = true), 8000);
+    toastTimer = window.setTimeout(() => {
+      toastEl.hidden = true;
+      void updateRegions();
+    }, 8000);
+    void updateRegions();
   }
   void listen<{ id: number; name: string; at: string }>("task-due", (e) => {
     showToast(`⏰ ${e.payload.at} ${e.payload.name}`);
   });
   void listen("tasks-changed", () => void render());
+  // 托盘/外部改动穿透状态后同步手柄与拖动
+  void listen("bar-settings-changed", () => {
+    void refreshCt();
+    void applyOpacity();
+  });
 
   setInterval(updateNow, 20_000);
   setInterval(render, 60_000);
-  void render();
-  void applyOpacity();
+  (async () => {
+    try {
+      const mode = await invoke<string | null>("settings_get", { key: "bar_view_mode" });
+      if (mode === "half" || mode === "full") viewMode = mode;
+    } catch {
+      /* 默认全天 */
+    }
+    updateModeBtn();
+    await refreshCt();
+    await applyOpacity();
+    void render();
+  })();
 }

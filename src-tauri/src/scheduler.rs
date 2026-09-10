@@ -87,6 +87,47 @@ pub fn spawn(app: AppHandle) {
     });
 }
 
+/// 某一天的任务视图:周期任务(当天有发生点)+ 一次性任务(当天到期)
+/// + 未定时间任务(每个视图都带上看)。
+#[tauri::command]
+pub fn tasks_for_day(app: AppHandle, date: String) -> Result<Vec<Task>, String> {
+    let day =
+        chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|e| format!("日期无效「{date}」: {e}"))?;
+    let day_start = day
+        .and_hms_opt(0, 0, 0)
+        .and_then(|t| t.and_local_timezone(Local).single())
+        .ok_or("本地时区解析失败")?;
+
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&format!("SELECT {TASK_COLS} FROM tasks ORDER BY pinned DESC, priority DESC, id ASC"))
+        .map_err(|e| e.to_string())?;
+    let tasks = stmt
+        .query_map([], row_to_task)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(tasks
+        .into_iter()
+        .filter(|task| match task.kind.as_str() {
+            "recurring" => match task.cron.as_deref().and_then(|e| parse_cron(e).ok()) {
+                Some(sched) => sched
+                    .after(&day_start)
+                    .next()
+                    .map(|t| t.date_naive() == day)
+                    .unwrap_or(false),
+                None => true, // 没配 cron 的周期任务始终可见
+            },
+            _ => match once_due_local(task) {
+                Some(due) => due.date_naive() == day,
+                None => true, // 未定时间的一次性任务始终可见
+            },
+        })
+        .collect())
+}
+
 /// once 任务的 due(本地时间);解析失败返回 None。
 fn once_due_local(task: &Task) -> Option<DateTime<Local>> {
     let due = task.once_due.as_deref()?;
@@ -157,10 +198,41 @@ fn scan_once(app: &AppHandle) -> Result<(), String> {
 /// - 一次性任务且指定了今日时间:固定位置
 /// - 正在执行的任务:按实际开始时间,固定位置
 /// - 其余任务:从当前时间开始往后顺序排(开始执行后会变成固定位置)
+/// done 任务按今日执行记录定位:开始取当天最早一次,时长取实际累计(没有就按预估)
+fn done_occ(
+    task: &Task,
+    started_at: &str,
+    actual_sum: i64,
+    day_start: DateTime<Local>,
+) -> Option<Occurrence> {
+    let started = chrono::DateTime::parse_from_rfc3339(started_at)
+        .ok()?
+        .with_timezone(&Local);
+    let est = task.estimated_minutes.unwrap_or(30).max(5);
+    Some(Occurrence {
+        task_id: task.id,
+        name: task.name.clone(),
+        start_minute: ((started.timestamp() - day_start.timestamp()) / 60).clamp(0, 1439),
+        duration_minutes: if actual_sum > 0 { actual_sum.max(5) } else { est },
+        kind: task.kind.clone(),
+        status: "done".into(),
+        doing_log_id: None,
+    })
+}
+
 #[tauri::command]
 pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|e| e.to_string())?;
+
+    let now = Local::now();
+    let today = now.date_naive();
+    let now_minute = (now.hour() * 60 + now.minute()) as i64;
+    let day_start = today
+        .and_hms_opt(0, 0, 0)
+        .and_then(|t| t.and_local_timezone(Local).single())
+        .ok_or("本地时区解析失败")?;
+
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {TASK_COLS} FROM tasks
@@ -186,20 +258,78 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
     drop(stmt);
+
+    // 已完成任务的今日执行记录:done 也留在时间轴上(灰色遮罩),按实际时间定位
+    let day_end = (day_start + Duration::hours(24)).to_rfc3339();
+    let mut stmt = conn
+        .prepare(
+            "SELECT task_id, MIN(started_at), SUM(COALESCE(actual_minutes, 0))
+             FROM task_logs
+             WHERE ended_at IS NOT NULL AND started_at >= ?1 AND started_at < ?2
+             GROUP BY task_id",
+        )
+        .map_err(|e| e.to_string())?;
+    let done_pos: std::collections::HashMap<i64, (String, i64)> = stmt
+        .query_map([day_start.to_rfc3339(), day_end], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                (r.get::<_, String>(1)?, r.get::<_, i64>(2)?),
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<std::collections::HashMap<i64, (String, i64)>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
     drop(conn);
 
-    let now = Local::now();
-    let today = now.date_naive();
-    let now_minute = (now.hour() * 60 + now.minute()) as i64;
-    let day_start = today
-        .and_hms_opt(0, 0, 0)
-        .and_then(|t| t.and_local_timezone(Local).single())
-        .ok_or("本地时区解析失败")?;
+    // 每个任务只取最新一条打开 log(历史 bug 曾堆积多条,时间轴画出多个色块)
+    let mut latest_by_task: std::collections::HashMap<i64, (i64, String)> =
+        std::collections::HashMap::new();
+    for (log_id, task_id, started_at) in open_logs {
+        latest_by_task
+            .entry(task_id)
+            .and_modify(|e| {
+                if log_id > e.0 {
+                    *e = (log_id, started_at.clone());
+                }
+            })
+            .or_insert((log_id, started_at));
+    }
 
+    // doing 任务先定位:以实际开始时间为固定位置(跨天开始的压到 0 点);
+    // 已定位的任务跳过常规排布,避免同一任务出现两个色块
     let mut out = Vec::new();
+    let mut doing_ids: HashSet<i64> = HashSet::new();
+    for (task_id, (log_id, started_at)) in &latest_by_task {
+        let Some(task) = tasks.iter().find(|t| t.id == *task_id) else {
+            continue;
+        };
+        let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at) else {
+            continue;
+        };
+        if started.date_naive() > today {
+            continue;
+        }
+        doing_ids.insert(*task_id);
+        let est = task.estimated_minutes.unwrap_or(30).max(5);
+        let start_minute = ((started.timestamp() - day_start.timestamp()) / 60).clamp(0, 1439);
+        out.push(Occurrence {
+            task_id: task.id,
+            name: task.name.clone(),
+            start_minute,
+            duration_minutes: est,
+            kind: task.kind.clone(),
+            status: "doing".into(),
+            doing_log_id: Some(*log_id),
+        });
+    }
+
     let mut queued: Vec<&Task> = Vec::new();
 
     for task in &tasks {
+        if doing_ids.contains(&task.id) {
+            continue;
+        }
         let est = task.estimated_minutes.unwrap_or(30).max(5);
         match task.kind.as_str() {
             "recurring" => {
@@ -247,39 +377,29 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
                         status: task.status.clone(),
                         doing_log_id: None,
                     });
-                } else if task.status != "done" {
-                    queued.push(task); // 没定时间或不是今天:从现在往后排
-                }
-            }
-            _ => {
-                if task.status != "done" {
+                } else if let Some((started_at, sum)) = done_pos.get(&task.id) {
+                    // 没定时间但今天做过:按实际执行时间留在时间轴上
+                    if let Some(occ) = done_occ(task, started_at, *sum, day_start) {
+                        out.push(occ);
+                    } else {
+                        queued.push(task);
+                    }
+                } else {
+                    // 没定时间或不是今天:从现在往后排(done 的画灰色)
                     queued.push(task);
                 }
             }
-        }
-    }
-
-    // doing 任务:以实际开始时间为固定位置(跨天开始的压到 0 点)
-    for (log_id, task_id, started_at) in &open_logs {
-        let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at) else {
-            continue;
-        };
-        let started = started.with_timezone(&Local);
-        if started.date_naive() > today {
-            continue;
-        }
-        if let Some(task) = tasks.iter().find(|t| t.id == *task_id) {
-            let est = task.estimated_minutes.unwrap_or(30).max(5);
-            let start_minute = ((started.timestamp() - day_start.timestamp()) / 60).clamp(0, 1439);
-            out.push(Occurrence {
-                task_id: task.id,
-                name: task.name.clone(),
-                start_minute,
-                duration_minutes: est,
-                kind: task.kind.clone(),
-                status: "doing".into(),
-                doing_log_id: Some(*log_id),
-            });
+            _ => {
+                if let Some((started_at, sum)) = done_pos.get(&task.id) {
+                    if let Some(occ) = done_occ(task, started_at, *sum, day_start) {
+                        out.push(occ);
+                    } else {
+                        queued.push(task);
+                    }
+                } else {
+                    queued.push(task);
+                }
+            }
         }
     }
 

@@ -22,7 +22,7 @@
         "label": "timeline-bar",
         "title": "时间轴",
         "width": 1200,
-        "height": 56,
+        "height": 300,
         "decorations": false,
         "transparent": true,
         "shadow": false,
