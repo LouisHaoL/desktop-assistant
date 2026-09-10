@@ -41,8 +41,30 @@ const SEG_H = 8;
 
 const WIN = getCurrentWindow();
 
-function hhmm(minute: number): string {
-  return `${String(Math.floor(minute / 60) % 24).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+// 分钟数 → 显示文本(受 12/24 小时制设置影响)
+function makeHhmm(fmt: () => "24" | "12") {
+  return (minute: number): string => {
+    const h24 = Math.floor(minute / 60) % 24;
+    const m = String(minute % 60).padStart(2, "0");
+    if (fmt() === "12") {
+      const suffix = h24 < 12 ? "上午" : "下午";
+      const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+      return `${suffix}${h12}:${m}`;
+    }
+    return `${String(h24).padStart(2, "0")}:${m}`;
+  };
+}
+let timeFmt: "24" | "12" = "24";
+const hhmm = makeHhmm(() => timeFmt);
+
+// 整点刻度标签
+function hourLabel(h: number): string {
+  if (timeFmt === "12") {
+    const suffix = h < 12 ? "上午" : "下午";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${suffix}${h12}`;
+  }
+  return String(h);
 }
 
 export function initBar() {
@@ -123,8 +145,8 @@ export function initBar() {
       push(strip, "strip");
       push(gripEl, "grip");
     }
-    if (!menuEl.hidden) push(menuEl, "pop");
-    if (!panelEl.hidden) push(panelEl, "pop");
+    if (!menuEl.hidden) push(menuEl, "menu");
+    if (!panelEl.hidden) push(panelEl, "panel");
     try {
       await invoke("set_bar_hit_regions", { regions });
     } catch {
@@ -165,13 +187,13 @@ export function initBar() {
       const label = document.createElement("span");
       label.style.position = "absolute";
       label.style.left = `${((m - viewStart) / span) * 100}%`;
-      label.textContent = String(h % 24);
+      label.textContent = hourLabel(h % 24);
       labels.append(label);
     }
     const zero = document.createElement("span");
     zero.style.position = "absolute";
     zero.style.left = "0";
-    zero.textContent = String(viewStart / 60);
+    zero.textContent = hourLabel(viewStart / 60);
     labels.append(zero);
   }
 
@@ -316,11 +338,7 @@ export function initBar() {
     const span = viewEnd - viewStart;
     nowEl.style.left = `${((minutes - viewStart) / span) * 100}%`;
     timeEl.style.left = `${((minutes - viewStart) / span) * 100}%`;
-    timeEl.textContent = new Date().toLocaleTimeString("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
+    timeEl.textContent = hhmm(minutes);
   }
 
   // ---- 任务快捷操作面板(打开时重新查库,状态和任务池保持一致) ----
@@ -343,9 +361,13 @@ export function initBar() {
     const name = fresh?.name ?? o.name;
 
     panelEl.innerHTML = `
-      <div class="bar-panel-title"></div>
+      <div class="bar-panel-head">
+        <div class="bar-panel-title"></div>
+        <button type="button" class="bar-panel-close" title="关闭">✕</button>
+      </div>
       <div class="bar-panel-meta"></div>
       <div class="bar-panel-actions"></div>`;
+    panelEl.querySelector(".bar-panel-close")!.addEventListener("click", () => closePops());
     panelEl.querySelector<HTMLElement>(".bar-panel-title")!.textContent = name;
     panelEl.querySelector<HTMLElement>(".bar-panel-meta")!.textContent =
       `${hhmm(o.start_minute)} - ${hhmm(o.start_minute + o.duration_minutes)} · 约 ${o.duration_minutes} 分钟` +
@@ -460,6 +482,17 @@ export function initBar() {
     }
   });
 
+  // 12/24 小时制(设置页改完会广播 bar-settings-changed)
+  async function reloadTimeFmt() {
+    try {
+      const v = await invoke<string | null>("settings_get", { key: "bar_time_format" });
+      if (v === "12" || v === "24") timeFmt = v;
+    } catch {
+      /* 默认 24 */
+    }
+    void render();
+  }
+
   function updateModeBtn() {
     menuEl.querySelector<HTMLButtonElement>('[data-act="view-mode"]')!.textContent = `⏱ 视图:${
       viewMode === "full" ? "全天" : "半天"
@@ -482,12 +515,16 @@ export function initBar() {
     showToast(`⏰ ${e.payload.at} ${e.payload.name}`);
   });
   void listen("tasks-changed", () => void render());
-  // 光标移出所有命中区域(点到桌面等)时由后端通知收起弹层
-  void listen("bar-pops-dismiss", () => closePops());
+  // 光标移出所有命中区域(点到桌面等)时由后端通知收起右键菜单;任务面板不自动关
+  void listen("bar-pops-dismiss", () => {
+    menuEl.hidden = true;
+    void updateRegions();
+  });
   // 托盘/外部改动穿透状态后同步手柄与拖动
   void listen("bar-settings-changed", () => {
     void refreshCt();
     void applyOpacity();
+    void reloadTimeFmt();
   });
 
   setInterval(updateNow, 20_000);
@@ -496,8 +533,10 @@ export function initBar() {
     try {
       const mode = await invoke<string | null>("settings_get", { key: "bar_view_mode" });
       if (mode === "half" || mode === "full") viewMode = mode;
+      const tf = await invoke<string | null>("settings_get", { key: "bar_time_format" });
+      if (tf === "12" || tf === "24") timeFmt = tf;
     } catch {
-      /* 默认全天 */
+      /* 默认全天 / 24 小时制 */
     }
     updateModeBtn();
     await refreshCt();

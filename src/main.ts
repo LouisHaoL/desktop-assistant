@@ -498,6 +498,16 @@ async function initSettingsOnce() {
     const bar = await WebviewWindow.getByLabel("timeline-bar");
     bar?.emit("bar-settings-changed", {});
   };
+  // 时间显示格式 12/24 小时制
+  const timeFmtSel = document.querySelector<HTMLSelectElement>("#set-time-format")!;
+  timeFmtSel.value =
+    (await invoke<string | null>("settings_get", { key: "bar_time_format" })) ?? "24";
+  timeFmtSel.onchange = async () => {
+    await invoke("settings_set", { key: "bar_time_format", value: timeFmtSel.value });
+    const bar = await WebviewWindow.getByLabel("timeline-bar");
+    bar?.emit("bar-settings-changed", {});
+  };
+
   const barVisible = document.querySelector<HTMLInputElement>("#set-bar-visible")!;
   const bar = await WebviewWindow.getByLabel("timeline-bar");
   barVisible.checked = bar ? await bar.isVisible() : true;

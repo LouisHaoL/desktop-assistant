@@ -118,9 +118,9 @@ fn spawn_hit_monitor(app: tauri::AppHandle) {
                 let _ = win.set_ignore_cursor_events(!inside);
                 interactive = inside;
             }
-            // 弹层开着时,光标移出所有区域(点到桌面/别处)→ 通知横条收起弹层。
-            // 窗口在区域外是穿透的,页面收不到 mousedown,只能由这里补一刀。
-            if !inside && regions.iter().any(|r| r.kind == "pop") {
+            // 右键菜单开着时,光标移出所有区域(点到桌面/别处)→ 通知横条收起菜单。
+            // 任务面板不自动收:鼠标离开时间轴去操作别的,面板还得留着看。
+            if !inside && regions.iter().any(|r| r.kind == "menu") {
                 let _ = win.emit("bar-pops-dismiss", ());
             }
         }
@@ -140,8 +140,17 @@ fn toggle_bar_visible(app: &tauri::AppHandle) {
 }
 
 /// 点击托盘菜单后,让勾选状态与窗口/穿透实际状态一致
+/// 托盘勾选项的句柄:托盘菜单不是 app.menu(),同步勾选必须持有条目本身
+pub struct TrayChecks(pub Mutex<Vec<CheckMenuItem<tauri::Wry>>>);
+
 fn sync_tray_checks(app: &tauri::AppHandle) {
-    let Some(menu) = app.menu() else { return };
+    let Some(state) = app.try_state::<TrayChecks>() else {
+        return;
+    };
+    let guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
     let bar_visible = app
         .get_webview_window("timeline-bar")
         .and_then(|w| w.is_visible().ok())
@@ -154,14 +163,14 @@ fn sync_tray_checks(app: &tauri::AppHandle) {
         .try_state::<ClickThrough>()
         .and_then(|s| s.0.lock().ok().map(|g| *g))
         .unwrap_or(false);
-    for (id, checked) in [
-        ("show_bar", bar_visible),
-        ("show_pet", pet_visible),
-        ("click_through", click_through),
-    ] {
-        if let Some(tauri::menu::MenuItemKind::Check(c)) = menu.get(id) {
-            let _ = c.set_checked(checked);
-        }
+    for item in guard.iter() {
+        let checked = match item.id().as_ref() {
+            "show_bar" => bar_visible,
+            "show_pet" => pet_visible,
+            "click_through" => click_through,
+            _ => continue,
+        };
+        let _ = item.set_checked(checked);
     }
 }
 
@@ -212,6 +221,12 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show_main = MenuItem::with_id(app, "show_main", "打开主面板", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_bar, &click_through, &show_pet, &show_main, &quit])?;
+    // 存下勾选条目句柄,sync_tray_checks 才能真正改到托盘菜单
+    let _ = app.manage(TrayChecks(Mutex::new(vec![
+        show_bar.clone(),
+        show_pet.clone(),
+        click_through.clone(),
+    ])));
 
     // 双击托盘图标 = 打开主界面(这个版本没有 click_count,自己按间隔判)
     let last_left_click = std::sync::Mutex::new(None::<std::time::Instant>);

@@ -217,6 +217,16 @@ pub fn task_update(db: tauri::State<Db>, task: Task) -> Result<(), String> {
     if n == 0 {
         return Err(format!("任务 {} 不存在", task.id));
     }
+    // 直接标记完成/跳过时,把还开着的执行记录收尾,
+    // 否则时间轴会一直按 doing 画,和任务池状态对不上
+    if task.status == "done" || task.status == "skipped" {
+        conn.execute(
+            "UPDATE task_logs SET ended_at=?1, actual_minutes=COALESCE(actual_minutes, 0)
+             WHERE task_id=?2 AND ended_at IS NULL",
+            params![Local::now().to_rfc3339(), task.id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 

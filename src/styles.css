@@ -668,31 +668,31 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
   white-space: nowrap;
   pointer-events: none;
 }
+/* 右键菜单:纯列表,无背景无边框,深色字(悬在透明空间里,不挡桌面观感) */
 .bar-menu {
   position: fixed;
   z-index: 30;
   display: flex;
   flex-direction: column;
   min-width: 190px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 4px;
-  box-shadow: 0 6px 20px #0005;
+  background: transparent;
+  border: none;
+  padding: 2px;
+  color: #26282e;
 }
 .bar-menu[hidden] { display: none; }
 .bar-menu button {
   border: none;
   background: transparent;
-  color: var(--text);
+  color: #26282e;
   font: inherit;
   font-size: 13px;
   text-align: left;
-  padding: 8px 12px;
-  border-radius: 7px;
+  padding: 7px 10px;
+  border-radius: 6px;
   cursor: pointer;
 }
-.bar-menu button:hover { background: var(--accent-soft); color: var(--accent); }
+.bar-menu button:hover { background: #26282e1c; color: #000; }
 
 /* ---- 横条:缩放手柄 / 任务操作面板 / 到点 toast ---- */
 .bar-grip {
@@ -722,7 +722,24 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
   max-width: 360px;
 }
 .bar-pop[hidden] { display: none; }
-.bar-panel-title { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+.bar-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.bar-panel-close {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.bar-panel-close:hover { background: #88888822; color: var(--text); }
+.bar-panel-title { font-weight: 700; font-size: 14px; }
 .bar-panel-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 10px; }
 .bar-panel-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .bar-panel-actions button {

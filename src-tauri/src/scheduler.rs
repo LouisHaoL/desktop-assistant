@@ -304,6 +304,10 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
         let Some(task) = tasks.iter().find(|t| t.id == *task_id) else {
             continue;
         };
+        // 池里已不是进行中(直接标记完成/跳过但 log 没收尾)→ 不按 doing 画
+        if task.status == "done" || task.status == "skipped" {
+            continue;
+        }
         let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at) else {
             continue;
         };
@@ -313,11 +317,13 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
         doing_ids.insert(*task_id);
         let est = task.estimated_minutes.unwrap_or(30).max(5);
         let start_minute = ((started.timestamp() - day_start.timestamp()) / 60).clamp(0, 1439);
+        // 进行中的色块延续到当前时刻:结尾 = max(预估结束, 现在)
+        let duration = (now_minute - start_minute).max(est).max(5);
         out.push(Occurrence {
             task_id: task.id,
             name: task.name.clone(),
             start_minute,
-            duration_minutes: est,
+            duration_minutes: duration,
             kind: task.kind.clone(),
             status: "doing".into(),
             doing_log_id: Some(*log_id),
