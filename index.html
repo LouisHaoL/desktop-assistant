@@ -16,6 +16,7 @@
       <button class="tab active" data-tab="pool">任务池</button>
       <button class="tab" data-tab="new">＋ 新增任务</button>
       <button class="tab" data-tab="review">复盘</button>
+      <button class="tab" data-tab="plugins">插件</button>
       <button class="tab" data-tab="settings">设置</button>
     </nav>
 
@@ -103,6 +104,67 @@
       </form>
     </section>
 
+    <!-- ===== 插件 ===== -->
+    <section id="page-plugins" class="page" hidden>
+      <div class="settings-card">
+        <h3>
+          已安装插件
+          <button id="btn-plugin-add" class="btn-mini">＋ 新建插件</button>
+        </h3>
+        <p class="hint">
+          插件是一段运行在主面板里的 JS 小扩展,通过 <code>zda</code> API 使用任务/设置/LLM/通知能力。插件与主程序同权限,只安装可信来源的插件。
+        </p>
+        <ul id="plugin-list" class="plugin-list"></ul>
+
+        <div id="plugin-form" hidden>
+          <div class="field">
+            <label>插件名</label>
+            <input id="pl-name" placeholder="比如:喝水提醒" />
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>版本</label>
+              <input id="pl-version" placeholder="0.1.0" value="0.1.0" />
+            </div>
+            <div class="field">
+              <label>简介(可选)</label>
+              <input id="pl-desc" placeholder="一句话说明插件做什么" />
+            </div>
+          </div>
+          <div class="field">
+            <label>插件代码(JS,通过 zda.register 提供界面)</label>
+            <textarea id="pl-code" rows="10" spellcheck="false" class="code-input"></textarea>
+          </div>
+          <details class="api-doc">
+            <summary>zda API 速查</summary>
+            <pre>zda.register({
+  render(el, ctx)  { /* 往面板画 UI,可返回清理函数 */ },
+  activate(ctx)    { /* 启用时可选项 */ },
+  deactivate()     { /* 停用时可选项 */ },
+});
+ctx.invoke("task_list")          // 白名单命令:任务/设置/时间轴/llm_chat
+ctx.storage.get/set(key, value)  // 插件私有 KV 存储
+ctx.toast(title, body)           // 右上角通知
+ctx.on("tasks-changed", fn)      // 监听事件(自动清理)
+ctx.emit("tasks-changed")        // 广播事件</pre>
+          </details>
+          <p id="pl-msg" class="hint"></p>
+          <div class="form-actions">
+            <button id="plugin-cancel" class="btn-ghost">取消</button>
+            <button id="plugin-save" class="btn-primary">保存插件</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <h3>示例插件(一键添加)</h3>
+        <ul id="plugin-templates" class="plugin-templates"></ul>
+      </div>
+
+      <h3 class="section-title">插件面板</h3>
+      <div id="plugin-panels"></div>
+    </section>
+
     <!-- ===== 复盘 ===== -->
     <section id="page-review" class="page" hidden>
       <div id="review-stats" class="stats-box" hidden></div>
@@ -114,6 +176,17 @@
 
     <!-- ===== 设置 ===== -->
     <section id="page-settings" class="page" hidden>
+      <p class="hint">开关、下拉、滑块改动后即自动保存,无需点保存按钮</p>
+      <div class="settings-card">
+        <h3>启动</h3>
+        <div class="field-inline">
+          <label><input type="checkbox" id="set-autostart" /> 开机自动启动</label>
+        </div>
+        <div class="field-inline">
+          <label><input type="checkbox" id="set-silent-start" /> 静默启动(启动时不打开主界面,从托盘图标进入)</label>
+        </div>
+      </div>
+
       <div class="settings-card">
         <h3>LLM 服务商配置 <button id="btn-profile-add" class="btn-mini">＋ 新增</button></h3>
         <ul id="llm-profiles" class="profile-list"></ul>
@@ -153,6 +226,16 @@
 
       <div class="settings-card">
         <h3>时间轴横条</h3>
+        <div class="field-inline">
+          <label><input type="checkbox" id="set-bar-visible" checked /> 显示时间轴横条</label>
+        </div>
+        <div class="field-inline">
+          <label>视图范围</label>
+          <select id="set-view-mode">
+            <option value="full">全天(0-24 点)</option>
+            <option value="half">半天(当前上/下午)</option>
+          </select>
+        </div>
         <div class="field">
           <label>背景透明度:<span id="opacity-val">0.75</span></label>
           <input id="set-opacity" type="range" min="10" max="100" value="75" />
@@ -164,8 +247,55 @@
             <option value="12">12 小时制(上午/下午)</option>
           </select>
         </div>
+      </div>
+
+      <div class="settings-card">
+        <h3>外观主题</h3>
         <div class="field-inline">
-          <label><input type="checkbox" id="set-bar-visible" checked /> 显示时间轴横条</label>
+          <label>颜色模式</label>
+          <select id="set-theme-mode">
+            <option value="auto">跟随系统</option>
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>主题预设</label>
+          <div id="theme-presets" class="theme-presets"></div>
+        </div>
+        <div class="theme-custom">
+          <label class="theme-color-item">主色 <input type="color" id="set-theme-accent" /></label>
+          <label class="theme-color-item">进行中 <input type="color" id="set-theme-doing" /></label>
+          <button id="btn-theme-reset" class="btn-mini">恢复默认配色</button>
+        </div>
+        <p class="hint">自定义颜色对主面板、时间轴弹层、桌宠、空闲提醒全部生效</p>
+      </div>
+
+      <div class="settings-card">
+        <h3>桌宠外观</h3>
+        <div class="pet-preview-row">
+          <div id="pet-preview" class="pet-preview"></div>
+          <p class="hint" style="margin: 0">桌宠当前的样子,改动立即生效(时间轴上右键「设置」也可到这里)</p>
+        </div>
+        <div class="field">
+          <label>表情速选</label>
+          <div id="pet-faces" class="face-grid"></div>
+        </div>
+        <div class="field">
+          <label>大小:<span id="pet-size-val">64</span> px</label>
+          <input id="set-pet-size" type="range" min="40" max="128" step="4" value="64" />
+        </div>
+        <div class="field">
+          <label>自定义图片(PNG / JPG / GIF / WebP,支持动图,≤5MB;未配置动作动画帧时才会显示)</label>
+          <div class="pet-asset-row">
+            <input type="file" id="set-pet-image" accept=".png,.jpg,.jpeg,.gif,.webp" />
+            <button id="btn-pet-image-clear" class="btn-mini">清除图片</button>
+          </div>
+          <p id="pet-asset-msg" class="hint"></p>
+        </div>
+        <div class="field">
+          <label>动作动画(为「待机 / 工作 / 提醒」三个动作槽位配帧;可逐张导帧,或导入横版雪碧图自动切分;配置后优先于上面的自定义图片)</label>
+          <div id="pet-actions" class="pet-actions"></div>
         </div>
       </div>
 
@@ -175,9 +305,9 @@
           <label>键鼠无操作</label>
           <input id="set-threshold" type="number" min="1" max="120" placeholder="15" />
           <label>分钟后提醒</label>
-          <button id="set-save-misc" class="btn-primary">保存</button>
         </div>
       </div>
+
     </section>
 
     <!-- 任务详情弹窗 -->

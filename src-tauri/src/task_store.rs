@@ -3,7 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// 一条任务。kind = recurring 时 cron 必填;kind = once 时用 once_due。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +27,8 @@ pub struct Task {
     pub created_at: String,
     /// 一次性任务的目标时间
     pub once_due: Option<String>,
+    /// 完成/跳过时刻(rfc3339);回到 todo/doing 时清空
+    pub done_at: Option<String>,
 }
 
 /// 一条执行记录,预估校准与每日复盘的数据源。
@@ -67,7 +69,8 @@ pub fn init_db(app: &AppHandle) -> Result<Db, String> {
            status TEXT NOT NULL DEFAULT 'todo'
              CHECK (status IN ('todo','doing','done','skipped')),
            created_at TEXT NOT NULL,
-           once_due TEXT
+           once_due TEXT,
+           done_at TEXT
          );
          CREATE TABLE IF NOT EXISTS task_logs (
            id INTEGER PRIMARY KEY,
@@ -96,6 +99,18 @@ pub fn init_db(app: &AppHandle) -> Result<Db, String> {
         conn.execute_batch("ALTER TABLE tasks ADD COLUMN content TEXT;")
             .map_err(|e| format!("迁移 content 列失败: {e}"))?;
     }
+    // 旧库迁移:补 done_at 列(完成时刻,按天视图靠它把历史已完成从当天池里排除)
+    let has_done_at: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='done_at'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if has_done_at == 0 {
+        conn.execute_batch("ALTER TABLE tasks ADD COLUMN done_at TEXT;")
+            .map_err(|e| format!("迁移 done_at 列失败: {e}"))?;
+    }
     Ok(Db(Mutex::new(conn)))
 }
 
@@ -113,13 +128,20 @@ pub fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
         status: r.get(9)?,
         created_at: r.get(10)?,
         once_due: r.get(11)?,
+        done_at: r.get(12)?,
     })
 }
 
-pub const TASK_COLS: &str = "id, name, content, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due";
+pub const TASK_COLS: &str = "id, name, content, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due, done_at";
+
+/// 任务数据变更后广播 tasks-changed,各窗口(横条/桌宠/主面板)监听自行刷新
+fn notify_changed(app: &AppHandle) {
+    let _ = app.emit("tasks-changed", {});
+}
 
 #[tauri::command]
 pub fn task_create(
+    app: AppHandle,
     db: tauri::State<Db>,
     name: String,
     content: Option<String>,
@@ -158,6 +180,7 @@ pub fn task_create(
     )
     .map_err(|e| format!("写入任务失败: {e}"))?;
     let id = conn.last_insert_rowid();
+    notify_changed(&app);
     Ok(Task {
         id,
         name: name.trim().to_string(),
@@ -171,6 +194,7 @@ pub fn task_create(
         status: "todo".into(),
         created_at: now,
         once_due,
+        done_at: None,
     })
 }
 
@@ -192,13 +216,31 @@ pub fn task_list(db: tauri::State<Db>) -> Result<Vec<Task>, String> {
 }
 
 #[tauri::command]
-pub fn task_update(db: tauri::State<Db>, task: Task) -> Result<(), String> {
+pub fn task_update(app: AppHandle, db: tauri::State<Db>, task: Task) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
+    // 查旧状态:只有「刚变成 done/skipped」才记 done_at,一直保持 done 的编辑不动它
+    let prev: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT status, done_at FROM tasks WHERE id=?1",
+            params![task.id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let now = Local::now().to_rfc3339();
+    let done_at = if task.status == "done" || task.status == "skipped" {
+        match prev {
+            Some((ref p, ref at)) if p == "done" || p == "skipped" => at.clone(),
+            _ => Some(now.clone()),
+        }
+    } else {
+        None
+    };
     let n = conn
         .execute(
             "UPDATE tasks SET name=?1, content=?2, kind=?3, cron=?4, start_time=?5,
-             estimated_minutes=?6, priority=?7, pinned=?8, status=?9, once_due=?10
-             WHERE id=?11",
+             estimated_minutes=?6, priority=?7, pinned=?8, status=?9, once_due=?10, done_at=?11
+             WHERE id=?12",
             params![
                 task.name,
                 task.content,
@@ -210,6 +252,7 @@ pub fn task_update(db: tauri::State<Db>, task: Task) -> Result<(), String> {
                 task.pinned as i64,
                 task.status,
                 task.once_due,
+                done_at,
                 task.id
             ],
         )
@@ -227,22 +270,24 @@ pub fn task_update(db: tauri::State<Db>, task: Task) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
+    notify_changed(&app);
     Ok(())
 }
 
 #[tauri::command]
-pub fn task_delete(db: tauri::State<Db>, id: i64) -> Result<(), String> {
+pub fn task_delete(app: AppHandle, db: tauri::State<Db>, id: i64) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM task_logs WHERE task_id=?1", params![id])
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM tasks WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
+    notify_changed(&app);
     Ok(())
 }
 
 /// 开始一条任务:status 置 doing 并写一条 task_log,返回 log id(结束时回填)。
 #[tauri::command]
-pub fn task_start(db: tauri::State<Db>, id: i64, source: String) -> Result<i64, String> {
+pub fn task_start(app: AppHandle, db: tauri::State<Db>, id: i64, source: String) -> Result<i64, String> {
     let mut conn = db.0.lock().map_err(|e| e.to_string())?;
     let now = Local::now().to_rfc3339();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -266,12 +311,13 @@ pub fn task_start(db: tauri::State<Db>, id: i64, source: String) -> Result<i64, 
     .map_err(|e| e.to_string())?;
     let log_id = tx.last_insert_rowid();
     tx.commit().map_err(|e| e.to_string())?;
+    notify_changed(&app);
     Ok(log_id)
 }
 
 /// 结束一条任务:回填 task_log,任务置 done。
 #[tauri::command]
-pub fn task_finish(db: tauri::State<Db>, log_id: i64) -> Result<(), String> {
+pub fn task_finish(app: AppHandle, db: tauri::State<Db>, log_id: i64) -> Result<(), String> {
     let mut conn = db.0.lock().map_err(|e| e.to_string())?;
     let now = Local::now().to_rfc3339();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -302,17 +348,18 @@ pub fn task_finish(db: tauri::State<Db>, log_id: i64) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     tx.execute(
-        "UPDATE tasks SET status='done' WHERE id=?1",
-        params![task_id],
+        "UPDATE tasks SET status='done', done_at=?2 WHERE id=?1",
+        params![task_id, now],
     )
     .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
+    notify_changed(&app);
     Ok(())
 }
 
 /// 暂停一条任务:回填当前执行记录但不标记完成,任务回 todo。
 #[tauri::command]
-pub fn task_pause(db: tauri::State<Db>, log_id: i64) -> Result<(), String> {
+pub fn task_pause(app: AppHandle, db: tauri::State<Db>, log_id: i64) -> Result<(), String> {
     let mut conn = db.0.lock().map_err(|e| e.to_string())?;
     let now = Local::now().to_rfc3339();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -348,6 +395,7 @@ pub fn task_pause(db: tauri::State<Db>, log_id: i64) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
+    notify_changed(&app);
     Ok(())
 }
 

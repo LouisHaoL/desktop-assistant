@@ -16,7 +16,8 @@
         "label": "main",
         "title": "桌面小助理",
         "width": 800,
-        "height": 640
+        "height": 640,
+        "visible": false
       },
       {
         "label": "timeline-bar",
@@ -43,6 +44,20 @@
         "skipTaskbar": true,
         "resizable": false,
         "visible": false
+      },
+      {
+        "label": "task-panel",
+        "title": "任务操作",
+        "width": 440,
+        "height": 300,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "center": true
       },
       {
         "label": "idle-prompt",

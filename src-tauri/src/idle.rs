@@ -31,7 +31,7 @@ fn load_tasks_where(app: &AppHandle, status: &str) -> Result<Vec<Task>, String> 
     let mut stmt = conn
         .prepare(
             "SELECT id, name, content, kind, cron, start_time, estimated_minutes,
-             priority, pinned, status, created_at, once_due
+             priority, pinned, status, created_at, once_due, done_at
              FROM tasks WHERE status = ?1",
         )
         .map_err(|e| e.to_string())?;
@@ -50,6 +50,7 @@ fn load_tasks_where(app: &AppHandle, status: &str) -> Result<Vec<Task>, String> 
                 status: r.get(9)?,
                 created_at: r.get(10)?,
                 once_due: r.get(11)?,
+                done_at: r.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?

@@ -1,3 +1,4 @@
+mod assets;
 mod idle;
 mod llm;
 mod scheduler;
@@ -78,6 +79,9 @@ fn spawn_hit_monitor(app: tauri::AppHandle) {
     use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
     std::thread::spawn(move || {
         let mut interactive = false;
+        // 窗口创建后默认是"捕获鼠标"的,首轮必须显式设一次穿透,
+        // 否则在鼠标进出过区域之前,整块透明窗口会一直挡住下方的桌面/应用
+        let mut force_apply = true;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(60));
             let Some(win) = app.get_webview_window("timeline-bar") else {
@@ -114,9 +118,10 @@ fn spawn_hit_monitor(app: tauri::AppHandle) {
                 && regions
                     .iter()
                     .any(|r| lx >= r.x && ly >= r.y && lx <= r.x + r.w && ly <= r.y + r.h);
-            if inside != interactive {
+            if inside != interactive || force_apply {
                 let _ = win.set_ignore_cursor_events(!inside);
                 interactive = inside;
+                force_apply = false;
             }
             // 右键菜单开着时,光标移出所有区域(点到桌面/别处)→ 通知横条收起菜单。
             // 任务面板不自动收:鼠标离开时间轴去操作别的,面板还得留着看。
@@ -130,13 +135,29 @@ fn spawn_hit_monitor(app: tauri::AppHandle) {
 #[cfg(not(windows))]
 fn spawn_hit_monitor(_app: tauri::AppHandle) {}
 
-fn toggle_bar_visible(app: &tauri::AppHandle) {
-    let Some(win) = app.get_webview_window("timeline-bar") else {
-        return;
-    };
-    let vis = win.is_visible().unwrap_or(false);
-    let _ = if vis { win.hide() } else { win.show() };
+/// 显示/隐藏横条并把状态落库(设置页复选框、托盘、横条右键菜单共用这一份 bar_visible)
+fn set_bar_visible(app: &tauri::AppHandle, show: bool) {
+    if let Some(win) = app.get_webview_window("timeline-bar") {
+        let _ = if show { win.show() } else { win.hide() };
+    }
+    if let Some(db) = app.try_state::<crate::task_store::Db>() {
+        if let Ok(conn) = db.0.lock() {
+            let _ = conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('bar_visible', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [if show { "1" } else { "0" }],
+            );
+        }
+    }
     sync_tray_checks(app);
+}
+
+fn toggle_bar_visible(app: &tauri::AppHandle) {
+    let vis = app
+        .get_webview_window("timeline-bar")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    set_bar_visible(app, !vis);
 }
 
 /// 点击托盘菜单后,让勾选状态与窗口/穿透实际状态一致
@@ -191,10 +212,11 @@ fn read_f(app: &tauri::AppHandle, key: &str) -> Option<f64> {
 /// 启动时恢复横条/桌宠的上次位置和大小(没存过就用默认布局)
 fn restore_window_geometry(app: &tauri::AppHandle) {
     if let Some(bar) = app.get_webview_window("timeline-bar") {
+        // 横条窗口保持原样(色带 + 下方透明弹层空间);任务详情/操作面板
+        // 用独立的 task-panel 窗口弹在屏幕中央,横条自身不再承担居中弹层。
         let w = read_f(app, "bar_w");
         let x = read_f(app, "bar_x");
         let y = read_f(app, "bar_y");
-        // 高度固定:色带 + 下方透明弹层空间(弹层不再临时改窗口尺寸,时间轴不会变形)
         if let Some(w) = w {
             let _ = bar.set_size(tauri::LogicalSize::new(w.max(320.0), 300.0));
         } else if let Ok(Some(monitor)) = bar.primary_monitor() {
@@ -214,13 +236,19 @@ fn restore_window_geometry(app: &tauri::AppHandle) {
 }
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let show_bar = CheckMenuItem::with_id(app, "show_bar", "显示时间轴横条", true, true, None::<&str>)?;
+    // 显示状态勾选按上次落库的 bar_visible 初始化
+    let bar_visible = read_setting(app, "bar_visible").as_deref() != Some("0");
+    let show_bar = CheckMenuItem::with_id(app, "show_bar", "显示时间轴横条", true, bar_visible, None::<&str>)?;
     let show_pet = CheckMenuItem::with_id(app, "show_pet", "显示桌宠", true, false, None::<&str>)?;
     let click_through =
         CheckMenuItem::with_id(app, "click_through", "横条鼠标穿透", true, false, None::<&str>)?;
+    let open_settings = MenuItem::with_id(app, "open_settings", "⚙ 设置", true, None::<&str>)?;
     let show_main = MenuItem::with_id(app, "show_main", "打开主面板", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_bar, &click_through, &show_pet, &show_main, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&show_bar, &click_through, &show_pet, &open_settings, &show_main, &quit],
+    )?;
     // 存下勾选条目句柄,sync_tray_checks 才能真正改到托盘菜单
     let _ = app.manage(TrayChecks(Mutex::new(vec![
         show_bar.clone(),
@@ -278,11 +306,39 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     let _ = win.set_focus();
                 }
             }
+            // 托盘右键「设置」:打开主面板并直达设置页
+            "open_settings" => {
+                use tauri::Emitter;
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+                let _ = app.emit_to("main", "open-settings", ());
+            }
             "quit" => app.exit(0),
             _ => {}
         })
         .build(app)?;
     Ok(())
+}
+
+/// 开机自启:是否已启用(Windows 写 HKCU Run 注册表)
+#[tauri::command]
+fn autostart_is_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// 开机自启:开/关
+#[tauri::command]
+fn autostart_set(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    if enable {
+        autolaunch.enable().map_err(|e| e.to_string())
+    } else {
+        autolaunch.disable().map_err(|e| e.to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -292,9 +348,34 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // 时间轴横条/桌宠:恢复上次的位置和大小
             restore_window_geometry(app.handle());
+
+            // 横条窗口创建后默认捕获鼠标:先显式置为穿透,
+            // 命中监视器稍后会按上报的区域精确接管(区域内可点、区域外穿透)
+            if let Some(bar) = app.get_webview_window("timeline-bar") {
+                let _ = bar.set_ignore_cursor_events(true);
+            }
+
+            // 启动状态恢复:静默启动不弹主界面;横条按上次的显示状态恢复。
+            // (用户 setup 在 run 阶段执行:窗口已创建、Db 已 manage,读 settings 安全)
+            let silent = read_setting(app.handle(), "silent_start").as_deref() == Some("1");
+            if !silent {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                }
+            }
+            if read_setting(app.handle(), "bar_visible").as_deref() == Some("0") {
+                if let Some(bar) = app.get_webview_window("timeline-bar") {
+                    let _ = bar.hide();
+                }
+            }
 
             // 主面板点关闭 = 隐藏到托盘
             if let Some(main) = app.get_webview_window("main") {
@@ -310,6 +391,8 @@ pub fn run() {
             }
 
             setup_tray(app.handle())?;
+            // 窗口创建完成后对齐托盘勾选与实际显隐/穿透状态
+            sync_tray_checks(app.handle());
             scheduler::spawn(app.handle().clone());
             idle::spawn(app.handle().clone());
             Ok(())
@@ -329,8 +412,14 @@ pub fn run() {
             scheduler::timeline_today,
             scheduler::tasks_for_day,
             llm::llm_chat,
+            assets::pet_asset_save,
+            assets::pet_asset_list,
+            assets::pet_asset_read,
+            assets::pet_asset_delete,
             set_click_through,
-            set_bar_hit_regions
+            set_bar_hit_regions,
+            autostart_is_enabled,
+            autostart_set
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -344,8 +433,7 @@ pub fn run() {
     app.manage(ClickThrough(Mutex::new(ct_on)));
     app.manage(HitRegions(Default::default()));
     spawn_hit_monitor(app.handle().clone());
-    // 托盘勾选与恢复出的穿透状态对齐
-    sync_tray_checks(app.handle());
+    // 托盘勾选对齐在 setup 里做(run 阶段窗口才存在,这里同步读不到可见性)
 
     app.run(|_app, _event| {});
 }

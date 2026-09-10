@@ -87,8 +87,22 @@ pub fn spawn(app: AppHandle) {
     });
 }
 
+/// 已完结(done/skipped):只留在完成那一天,不再排进时间轴的"从现在往后"队列
+fn is_finished(status: &str) -> bool {
+    status == "done" || status == "skipped"
+}
+
+/// done_at(rfc3339)解析成本地日期;没记录过完成时间则 None
+fn done_day(task: &Task) -> Option<chrono::NaiveDate> {
+    task.done_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| t.with_timezone(&Local).date_naive())
+}
+
 /// 某一天的任务视图:周期任务(当天有发生点)+ 一次性任务(当天到期)
 /// + 未定时间任务(每个视图都带上看)。
+/// 已完成/已跳过的任务只留在完成那一天,不再天天挂在池里。
 #[tauri::command]
 pub fn tasks_for_day(app: AppHandle, date: String) -> Result<Vec<Task>, String> {
     let day =
@@ -109,21 +123,56 @@ pub fn tasks_for_day(app: AppHandle, date: String) -> Result<Vec<Task>, String> 
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
+    // 旧数据没记 done_at 的已完成任务:用最近一条执行记录的结束/开始时刻兜底定位完成日
+    let mut stmt = conn
+        .prepare(
+            "SELECT task_id, MAX(COALESCE(ended_at, started_at)) FROM task_logs
+             WHERE task_id IN (SELECT id FROM tasks WHERE status IN ('done','skipped'))
+             GROUP BY task_id",
+        )
+        .map_err(|e| e.to_string())?;
+    let last_log_day: std::collections::HashMap<i64, chrono::NaiveDate> = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?
+        .filter_map(|row| {
+            row.ok().and_then(|(id, ts)| {
+                chrono::DateTime::parse_from_rfc3339(&ts)
+                    .ok()
+                    .map(|t| (id, t.with_timezone(&Local).date_naive()))
+            })
+        })
+        .collect();
+    drop(stmt);
+
     Ok(tasks
         .into_iter()
-        .filter(|task| match task.kind.as_str() {
-            "recurring" => match task.cron.as_deref().and_then(|e| parse_cron(e).ok()) {
-                Some(sched) => sched
-                    .after(&day_start)
-                    .next()
-                    .map(|t| t.date_naive() == day)
-                    .unwrap_or(false),
-                None => true, // 没配 cron 的周期任务始终可见
-            },
-            _ => match once_due_local(task) {
-                Some(due) => due.date_naive() == day,
-                None => true, // 未定时间的一次性任务始终可见
-            },
+        .filter(|task| {
+            let visible_normally = match task.kind.as_str() {
+                "recurring" => match task.cron.as_deref().and_then(|e| parse_cron(e).ok()) {
+                    Some(sched) => sched
+                        .after(&day_start)
+                        .next()
+                        .map(|t| t.date_naive() == day)
+                        .unwrap_or(false),
+                    None => true, // 没配 cron 的周期任务始终可见
+                },
+                _ => match once_due_local(task) {
+                    Some(due) => due.date_naive() == day,
+                    None => true, // 未定时间的一次性任务始终可见
+                },
+            };
+            if task.status == "done" || task.status == "skipped" {
+                // 只在完成那天显示;兜底顺序:done_at → 最近执行记录 → 原规则(纯旧数据)
+                if let Some(d) = done_day(task) {
+                    d == day
+                } else if let Some(d) = last_log_day.get(&task.id) {
+                    *d == day
+                } else {
+                    visible_normally
+                }
+            } else {
+                visible_normally
+            }
         })
         .collect())
 }
@@ -140,7 +189,7 @@ fn scan_once(app: &AppHandle) -> Result<(), String> {
     let db = app.state::<Db>();
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, name, content, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due FROM tasks")
+        .prepare("SELECT id, name, content, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due, done_at FROM tasks")
         .map_err(|e| e.to_string())?;
     let tasks = stmt
         .query_map([], |r| {
@@ -157,6 +206,7 @@ fn scan_once(app: &AppHandle) -> Result<(), String> {
                 status: r.get(9)?,
                 created_at: r.get(10)?,
                 once_due: r.get(11)?,
+                done_at: r.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -340,13 +390,13 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
         match task.kind.as_str() {
             "recurring" => {
                 let Some(expr) = task.cron.as_deref() else {
-                    if task.status != "done" {
+                    if !is_finished(&task.status) {
                         queued.push(task);
                     }
                     continue;
                 };
                 let Ok(sched) = parse_cron(expr) else {
-                    if task.status != "done" {
+                    if !is_finished(&task.status) {
                         queued.push(task);
                     }
                     continue;
@@ -367,7 +417,7 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
                         doing_log_id: None,
                     });
                 }
-                if !placed && task.status != "done" {
+                if !placed && !is_finished(&task.status) {
                     queued.push(task); // 今天没有发生点,也从现在往后排
                 }
             }
@@ -390,8 +440,8 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
                     } else {
                         queued.push(task);
                     }
-                } else {
-                    // 没定时间或不是今天:从现在往后排(done 的画灰色)
+                } else if !is_finished(&task.status) {
+                    // 没定时间或不是今天:从现在往后排;已完结的只留在完成那天,不排上今天
                     queued.push(task);
                 }
             }
@@ -402,7 +452,7 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
                     } else {
                         queued.push(task);
                     }
-                } else {
+                } else if !is_finished(&task.status) {
                     queued.push(task);
                 }
             }

@@ -1,26 +1,62 @@
+/* ===== 配色方案 ===== */
+/* 调色板只定义一次(浅 -l / 深 -dk),"当前生效"变量由下面的选择器映射:
+   默认跟随系统;theme.ts 会在 documentElement 上写 data-scheme=light/dark 强制指定,
+   自定义主题色(--accent/--accent-soft/--doing)以内联样式覆盖,优先级最高。
+   改调色板时记得同步 theme.ts 里的 CARD_LIGHT / CARD_DARK。 */
 :root {
   color-scheme: light dark;
-  --bg: #f5f6f8;
-  --card: #ffffff;
-  --text: #1c1e21;
-  --text-dim: #6b7280;
-  --line: #e5e7eb;
-  --accent: #4f6ef7;
-  --accent-soft: #eef1fe;
-  --danger: #e5484d;
-  --doing: #18a05e;
+  --bg-l: #f5f6f8;
+  --card-l: #ffffff;
+  --text-l: #1c1e21;
+  --text-dim-l: #6b7280;
+  --line-l: #e5e7eb;
+  --accent-l: #4f6ef7;
+  --accent-soft-l: #eef1fe;
+  --danger-l: #e5484d;
+  --doing-l: #18a05e;
+  --bg-dk: #17181c;
+  --card-dk: #22242a;
+  --text-dk: #e6e7ea;
+  --text-dim-dk: #9aa0aa;
+  --line-dk: #33363e;
+  --accent-dk: #7b93ff;
+  --accent-soft-dk: #2a2f45;
+  --danger-dk: #ff6369;
+  --doing-dk: #3ddc97;
+  --bg: var(--bg-l);
+  --card: var(--card-l);
+  --text: var(--text-l);
+  --text-dim: var(--text-dim-l);
+  --line: var(--line-l);
+  --accent: var(--accent-l);
+  --accent-soft: var(--accent-soft-l);
+  --danger: var(--danger-l);
+  --doing: var(--doing-l);
 }
+/* 强制深色 */
+:root[data-scheme="dark"] {
+  --bg: var(--bg-dk);
+  --card: var(--card-dk);
+  --text: var(--text-dk);
+  --text-dim: var(--text-dim-dk);
+  --line: var(--line-dk);
+  --accent: var(--accent-dk);
+  --accent-soft: var(--accent-soft-dk);
+  --danger: var(--danger-dk);
+  --doing: var(--doing-dk);
+}
+/* 跟随系统:系统深色且未被强制为浅色时走深色 */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17181c;
-    --card: #22242a;
-    --text: #e6e7ea;
-    --text-dim: #9aa0aa;
-    --line: #33363e;
-    --accent: #7b93ff;
-    --accent-soft: #2a2f45;
-    --danger: #ff6369;
-    --doing: #3ddc97;
+  :root:not([data-scheme="light"]) {
+    --bg: var(--bg-dk);
+    --card: var(--card-dk);
+    --text: var(--text-dk);
+    --text-dim: var(--text-dim-dk);
+    --line: var(--line-dk);
+    --accent: var(--accent-dk);
+    --accent-soft: var(--accent-soft-dk);
+    --danger: var(--danger-dk);
+    --doing: var(--doing-dk);
   }
 }
 * { box-sizing: border-box; }
@@ -286,6 +322,42 @@ body.view-alt .tabs,
 body.view-alt .page,
 body.view-alt #toasts { display: none !important; }
 
+/* ============ 任务操作面板(独立小窗口,屏幕中央弹出) ============ */
+body.view-task-panel { background: transparent; padding: 0; }
+.tp-card {
+  margin: 16px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 10px 36px #0007;
+}
+.tp-card[hidden] { display: none; }
+.tp-content {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  margin-bottom: 10px;
+}
+.tp-content[hidden] { display: none; }
+.tp-waiting {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+  padding-top: 40px;
+}
+.tp-waiting[hidden] { display: none; }
+/* 面板窗口里的操作按钮:继承 bar-panel-actions 的主色按钮,danger 用卡片底色 */
+.bar-panel-actions button.danger {
+  background: var(--card);
+  color: var(--text);
+  border-color: var(--line);
+}
+
 /* ============ 时间轴横条 ============ */
 /* .bar 本身全透明:只有 .bar-head(色带+标签)有底色,
    下方是弹层空间;鼠标命中由后端按区域控制,透明处不挡桌面 */
@@ -296,7 +368,7 @@ body.view-alt #toasts { display: none !important; }
   flex-direction: column;
   background: transparent;
 }
-html:not([data-theme]) body.view-alt { color-scheme: dark; }
+/* 主题色由 theme.ts 统一控制 color-scheme,横条不再单独强制深色 */
 .bar-head {
   position: relative;
   flex: none;
@@ -306,7 +378,7 @@ html:not([data-theme]) body.view-alt { color-scheme: dark; }
 }
 .bar-strip {
   position: relative;
-  height: 44px; /* 固定高度:弹层展开不再挤压时间轴 */
+  height: 44px; /* 仅初始回退:每次渲染后由 bar.ts 按占用的泳道数自适应收紧 */
   border-radius: 6px;
   overflow: hidden;
 }
@@ -320,8 +392,8 @@ html:not([data-theme]) body.view-alt { color-scheme: dark; }
 .bar-tick:nth-child(6n) { background: #ffffff2e; }
 .bar-seg {
   position: absolute;
-  height: 9px;
-  border-radius: 3px;
+  height: 14px; /* 与 bar.ts 的 SEG_H 保持一致(行内样式会覆盖) */
+  border-radius: 4px;
   opacity: 0.9;
 }
 .bar-seg-once { border: 1px dashed #ffffff88; }
@@ -387,7 +459,8 @@ html:not([data-theme]) body.view-alt { color-scheme: dark; }
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-5px); }
 }
-.pet-emoji { font-size: 48px; user-select: none; line-height: 1; }
+/* .pet-face 兜底字号 48px;实际由 pet.ts 按桌宠大小内联覆盖 */
+.pet-face { font-size: 48px; user-select: none; line-height: 1; }
 .pet-status-dot {
   position: absolute;
   top: 2px; right: 2px;
@@ -720,6 +793,9 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
   padding: 12px 14px;
   box-shadow: 0 8px 28px #0006;
   max-width: 360px;
+  /* 面板现在居中在屏幕上,内容过长时内部滚动 */
+  max-height: 70vh;
+  overflow-y: auto;
 }
 .bar-pop[hidden] { display: none; }
 .bar-panel-head {
@@ -811,4 +887,290 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
 /* 设置页:空闲提醒一行式 */
 .idle-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .idle-row input { width: 72px; }
+
+/* ============ 外观主题 ============ */
+.theme-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.theme-swatch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.theme-swatch:hover { border-color: var(--accent); }
+.theme-swatch .sw {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1px #0002;
+}
+.theme-custom {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.theme-color-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.theme-color-item input[type="color"] {
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* ============ 桌宠外观 ============ */
+.pet-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.pet-preview {
+  flex: none;
+  min-width: 52px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  font-size: 32px;
+}
+.pet-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.face-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.face-btn {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  cursor: pointer;
+}
+.face-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+.pet-asset-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pet-asset-row input[type="file"] { font: inherit; font-size: 12px; color: var(--text-dim); max-width: 260px; }
+.asset-lab { flex: none; width: 76px; margin: 0; }
+.pet-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 动作动画帧列表 */
+.frame-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.frame-item {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.frame-item img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.frame-idx {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.frame-ops {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: none;
+  grid-template-columns: repeat(3, 1fr);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+}
+.frame-item:hover .frame-ops { display: grid; }
+.frame-ops button {
+  border: 0;
+  background: none;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text);
+}
+.frame-ops button:hover { color: var(--accent); }
+.frame-ops button[data-op="del"]:hover { color: var(--danger); }
+.frame-dur {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 0 2px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: center;
+}
+.pet-frame-ms-row { margin-top: 8px; align-items: center; }
+.pet-frame-ms-row input[type="range"] { flex: 1; }
+
+/* 动作槽位卡片 */
+.pet-actions { display: flex; flex-direction: column; gap: 12px; }
+.pet-slot {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pet-slot-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.pet-slot-head b { font-size: 13px; }
+.pet-slot-head .hint { margin: 0; }
+.slot-fold { flex: none; width: 14px; font-size: 12px; color: var(--text-dim); }
+.pet-slot-body { display: flex; flex-direction: column; gap: 8px; }
+.pet-slot-body[hidden] { display: none; }
+.slot-preview {
+  margin-left: auto;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.slot-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* ============ 插件页 ============ */
+.section-title {
+  margin: 18px 2px 10px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.plugin-list, .plugin-templates { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.plugin-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.plugin-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.plugin-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.plugin-panel-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; }
+.plugin-ver { font-size: 11px; color: var(--text-dim); }
+.plugin-body { font-size: 13px; }
+.plugin-error { color: var(--danger); font-size: 12px; margin: 6px 0 0; }
+.field-row { display: flex; gap: 12px; }
+.field-row .field { flex: 1; }
+.code-input {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+.api-doc { margin-top: 10px; font-size: 12px; color: var(--text-dim); }
+.api-doc summary { cursor: pointer; }
+.api-doc pre {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 示例插件的通用小样式(插件代码里直接用这些类) */
+.pz-row { display: flex; gap: 8px; margin-top: 8px; }
+.pz-row button {
+  padding: 5px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pz-row button:hover { filter: brightness(1.1); }
+.pz-clock {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: center;
+  padding: 6px 0 2px;
+}
+.pz-quote { margin: 2px 0 0; line-height: 1.8; }
+.pz-note {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+.pz-hint { margin: 6px 0 0; font-size: 11px; color: var(--text-dim); }
 

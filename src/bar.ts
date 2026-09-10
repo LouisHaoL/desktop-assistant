@@ -13,31 +13,16 @@ interface Occurrence {
   doingLogId: number | null;
 }
 
-interface TaskRow {
-  id: number;
-  name: string;
-  content: string | null;
-  kind: string;
-  cron: string | null;
-  start_time: string | null;
-  estimated_minutes: number | null;
-  priority: number;
-  pinned: boolean;
-  status: string;
-  created_at: string;
-  once_due: string | null;
-}
-
 const COLORS = ["#4f6ef7", "#18a05e", "#e58f2a", "#b45be1", "#2ab5a5", "#e5484d", "#7a6ff0", "#0ea5e9"];
 const MINUTES_PER_DAY = 1440;
 
 // 窗口高度固定:上面是时间轴色带,下面是透明弹层空间——
-// 弹层(右键菜单/任务面板)在这块空间里展开,不改窗口尺寸,时间轴永不变形
+// 弹层(右键菜单)在这块空间里展开;任务操作面板用独立窗口弹在屏幕中央
 const WINDOW_H = 300;
 const LANES = 4;
-const LANE_TOP = 4;
-const LANE_GAP = 10;
-const SEG_H = 8;
+const LANE_TOP = 2;
+const LANE_GAP = 4;
+const SEG_H = 14;
 
 const WIN = getCurrentWindow();
 
@@ -79,17 +64,16 @@ export function initBar() {
         </div>
         <div class="bar-labels" id="bar-labels"></div>
         <div class="bar-time" id="bar-time"></div>
-        <div class="bar-grip" id="bar-grip" title="拖动缩放宽度和高度">◢</div>
+        <div class="bar-grip" id="bar-grip" title="拖动缩放宽度">◢</div>
       </div>
       <div class="bar-toast" id="bar-toast" hidden></div>
-      <div class="bar-pop" id="bar-menu" hidden>
+      <div class="bar-menu" id="bar-menu" hidden>
         <button type="button" data-act="click-through"></button>
         <button type="button" data-act="view-mode"></button>
         <button type="button" data-act="open-settings">⚙ 设置</button>
         <button type="button" data-act="open-main">📋 打开主面板</button>
         <button type="button" data-act="hide-bar">✕ 隐藏横条(托盘里恢复)</button>
       </div>
-      <div class="bar-pop" id="bar-panel" hidden></div>
     </div>`;
 
   const strip = root.querySelector<HTMLDivElement>("#bar-strip")!;
@@ -98,7 +82,6 @@ export function initBar() {
   const gripEl = root.querySelector<HTMLDivElement>("#bar-grip")!;
   const toastEl = root.querySelector<HTMLDivElement>("#bar-toast")!;
   const menuEl = root.querySelector<HTMLDivElement>("#bar-menu")!;
-  const panelEl = root.querySelector<HTMLDivElement>("#bar-panel")!;
   const barRoot = root.querySelector<HTMLDivElement>("#bar-root")!;
 
   // ---- 视图范围:全天 0-24,半天只看当前上/下午(块更大) ----
@@ -146,7 +129,6 @@ export function initBar() {
       push(gripEl, "grip");
     }
     if (!menuEl.hidden) push(menuEl, "menu");
-    if (!panelEl.hidden) push(panelEl, "panel");
     try {
       await invoke("set_bar_hit_regions", { regions });
     } catch {
@@ -199,7 +181,6 @@ export function initBar() {
 
   function closePops() {
     menuEl.hidden = true;
-    panelEl.hidden = true;
     void updateRegions();
   }
 
@@ -231,11 +212,11 @@ export function initBar() {
   barRoot.addEventListener("mousedown", (e) => {
     if (e.button !== 0 || ct) return;
     const t = e.target as HTMLElement;
-    if (t.closest(".bar-seg, .bar-pop, .bar-grip, .bar-time")) return;
+    if (t.closest(".bar-seg, .bar-pop, .bar-menu, .bar-grip, .bar-time")) return;
     void WIN.startDragging();
   });
 
-  // 右下角 grip 拖动缩放(穿透模式下锁定)
+  // 右下角 grip 拖动缩放宽度和高度(穿透模式下锁定)
   gripEl.addEventListener("mousedown", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -249,7 +230,7 @@ export function initBar() {
       const sh = s.height / sc;
       const onMove = (ev: MouseEvent) => {
         const w = Math.max(360, sw + ev.clientX - sx);
-        const h = Math.max(120, Math.min(WINDOW_H, sh + ev.clientY - sy));
+        const h = Math.max(64, Math.min(WINDOW_H, sh + ev.clientY - sy));
         void WIN.setSize(new LogicalSize(w, h));
       };
       const onUp = () => {
@@ -276,7 +257,7 @@ export function initBar() {
 
   // ---- 渲染时间轴:当天所有任务(固定位置 + 从当前时间往后排) ----
   async function render() {
-    if (viewMode === "half") applyViewRange();
+    applyViewRange();
     renderScale();
     let occ: Occurrence[] = [];
     try {
@@ -310,7 +291,7 @@ export function initBar() {
       }`;
       seg.style.left = `${left}%`;
       seg.style.width = `${Math.max(right - left, 0.4)}%`;
-      seg.style.top = `${LANE_TOP + lane * LANE_GAP}px`;
+      seg.style.top = `${LANE_TOP + lane * (SEG_H + LANE_GAP)}px`;
       seg.style.height = `${SEG_H}px`;
       seg.style.background = colorFor(o.task_id);
       seg.title = `${o.name} · ${hhmm(o.start_minute)}(约 ${o.duration_minutes} 分钟)${
@@ -322,6 +303,13 @@ export function initBar() {
       });
       strip.append(seg);
     }
+    // 条带高度随占用的泳道数自适应:任务少时横条收紧,不再固定一块高度
+    const usedLanes = laneEnds.filter((end) => end > -1).length;
+    const stripH = Math.max(LANE_TOP + usedLanes * (SEG_H + LANE_GAP) - LANE_GAP + 3, 24);
+    strip.style.height = `${stripH}px`;
+    // 时间 pill 贴在条带内部下缘,缩放手柄贴右下角
+    timeEl.style.top = `${Math.max(stripH - 17, 4)}px`;
+    gripEl.style.top = `${Math.max(stripH - 12, 8)}px`;
     updateNow();
     void updateRegions();
   }
@@ -341,102 +329,20 @@ export function initBar() {
     timeEl.textContent = hhmm(minutes);
   }
 
-  // ---- 任务快捷操作面板(打开时重新查库,状态和任务池保持一致) ----
+  // ---- 任务快捷操作:交给独立的 task-panel 窗口,在屏幕中央弹出 ----
   async function openTaskPanel(o: Occurrence) {
     menuEl.hidden = true;
-    // 重新取任务和打开中的执行记录,不用时间轴上的旧状态
-    let fresh: TaskRow | undefined;
-    let doingLogId: number | null = o.doingLogId;
-    try {
-      const tasks = await invoke<TaskRow[]>("task_list");
-      fresh = tasks.find((x) => x.id === o.task_id);
-      const logs = await invoke<{ id: number; ended_at: string | null }[]>("task_logs_for", {
-        taskId: o.task_id,
-      });
-      doingLogId = logs.find((l) => !l.ended_at)?.id ?? null;
-    } catch {
-      /* 取不到就用时间轴上的数据 */
-    }
-    const status = fresh?.status ?? o.status;
-    const name = fresh?.name ?? o.name;
-
-    panelEl.innerHTML = `
-      <div class="bar-panel-head">
-        <div class="bar-panel-title"></div>
-        <button type="button" class="bar-panel-close" title="关闭">✕</button>
-      </div>
-      <div class="bar-panel-meta"></div>
-      <div class="bar-panel-actions"></div>`;
-    panelEl.querySelector(".bar-panel-close")!.addEventListener("click", () => closePops());
-    panelEl.querySelector<HTMLElement>(".bar-panel-title")!.textContent = name;
-    panelEl.querySelector<HTMLElement>(".bar-panel-meta")!.textContent =
-      `${hhmm(o.start_minute)} - ${hhmm(o.start_minute + o.duration_minutes)} · 约 ${o.duration_minutes} 分钟` +
-      (status === "doing" ? " · 进行中" : status === "done" ? " · 已完成" : " · 待办");
-    const actions = panelEl.querySelector<HTMLElement>(".bar-panel-actions")!;
-
-    const setStatus = async (newStatus: string) => {
-      const t = fresh ?? (await invoke<TaskRow[]>("task_list")).find((x) => x.id === o.task_id);
-      if (!t) throw new Error("任务不存在");
-      await invoke("task_update", { task: { ...t, status: newStatus } });
-    };
-
-    const mkBtn = (text: string, fn: () => Promise<void>, danger = false) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = text;
-      if (danger) b.className = "danger";
-      b.onclick = async () => {
-        try {
-          await fn();
-          await emit("tasks-changed", {});
-        } catch (err) {
-          showToast(String(err));
-        }
-        closePops();
-        void render();
-      };
-      actions.append(b);
-    };
-
-    if (status === "done") {
-      mkBtn("↩ 恢复为待办", async () => {
-        await setStatus("todo");
-      });
-    } else {
-      if (status !== "doing") {
-        mkBtn("▶ 开始", async () => {
-          await invoke("task_start", { id: o.task_id, source: "user" });
-        });
-      }
-      if (doingLogId != null) {
-        mkBtn("⏸ 暂停", async () => {
-          await invoke("task_pause", { logId: doingLogId });
-        });
-        mkBtn("✓ 完成", async () => {
-          await invoke("task_finish", { logId: doingLogId });
-        });
-      } else {
-        // 没开始也可以直接标记完成
-        mkBtn(
-          "✓ 直接标记完成",
-          async () => {
-            await setStatus("done");
-          },
-          true
-        );
-      }
-    }
-    // 面板贴着点击位置,放在色带下方的透明空间里,不影响时间轴布局
-    panelEl.style.left = "12px";
-    panelEl.style.top = "70px";
-    panelEl.hidden = false;
-    void updateRegions();
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    const panel = await WebviewWindow.getByLabel("task-panel");
+    if (!panel) return;
+    await emit("show-task-panel", { taskId: o.task_id }).catch(() => {});
+    await panel.show();
+    await panel.setFocus();
   }
 
   // ---- 右键菜单 ----
   barRoot.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    panelEl.hidden = true;
     const x = Math.min(e.clientX, window.innerWidth - 210);
     const y = Math.min(e.clientY + 8, window.innerHeight - 150);
     menuEl.style.left = `${x}px`;
@@ -445,9 +351,9 @@ export function initBar() {
     void updateRegions();
   });
   document.addEventListener("mousedown", (e) => {
-    if (menuEl.hidden && panelEl.hidden) return;
+    if (menuEl.hidden) return;
     const t = e.target as HTMLElement;
-    if (!menuEl.contains(t) && !panelEl.contains(t)) closePops();
+    if (!menuEl.contains(t)) closePops();
   });
   menuEl.addEventListener("click", async (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-act]");
@@ -460,6 +366,8 @@ export function initBar() {
     } else if (act === "view-mode") {
       viewMode = viewMode === "full" ? "half" : "full";
       await invoke("settings_set", { key: "bar_view_mode", value: viewMode }).catch(() => {});
+      // 通知设置页下拉同步(全局 emit,两个入口共用同一份配置)
+      await emit("bar-settings-changed", {}).catch(() => {});
       updateModeBtn();
       void render();
     } else if (act === "open-settings") {
@@ -478,6 +386,8 @@ export function initBar() {
         await main.setFocus();
       }
     } else if (act === "hide-bar") {
+      // 记住隐藏状态,重启后不再自动弹出;托盘/设置页可恢复
+      await invoke("settings_set", { key: "bar_visible", value: "0" }).catch(() => {});
       await WIN.hide();
     }
   });
@@ -490,6 +400,18 @@ export function initBar() {
     } catch {
       /* 默认 24 */
     }
+    void render();
+  }
+
+  // 视图范围(设置页/右键菜单共用 bar_view_mode,谁改都行)
+  async function reloadViewMode() {
+    try {
+      const v = await invoke<string | null>("settings_get", { key: "bar_view_mode" });
+      if (v === "half" || v === "full") viewMode = v;
+    } catch {
+      /* 保持现状 */
+    }
+    updateModeBtn();
     void render();
   }
 
@@ -520,25 +442,19 @@ export function initBar() {
     menuEl.hidden = true;
     void updateRegions();
   });
-  // 托盘/外部改动穿透状态后同步手柄与拖动
+  // 托盘/设置页/右键菜单任一处改动后,这里统一重新读配置生效
   void listen("bar-settings-changed", () => {
     void refreshCt();
     void applyOpacity();
     void reloadTimeFmt();
+    void reloadViewMode();
   });
 
   setInterval(updateNow, 20_000);
   setInterval(render, 60_000);
   (async () => {
-    try {
-      const mode = await invoke<string | null>("settings_get", { key: "bar_view_mode" });
-      if (mode === "half" || mode === "full") viewMode = mode;
-      const tf = await invoke<string | null>("settings_get", { key: "bar_time_format" });
-      if (tf === "12" || tf === "24") timeFmt = tf;
-    } catch {
-      /* 默认全天 / 24 小时制 */
-    }
-    updateModeBtn();
+    await reloadViewMode();
+    await reloadTimeFmt();
     await refreshCt();
     await applyOpacity();
     void render();
