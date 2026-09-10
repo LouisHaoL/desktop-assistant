@@ -127,7 +127,7 @@ pub fn run() {
                 if let Ok(Some(monitor)) = bar.primary_monitor() {
                     let w = monitor.size().width;
                     let _ = bar.set_position(tauri::PhysicalPosition::new(0i32, 0i32));
-                    let _ = bar.set_size(tauri::PhysicalSize::new(w, 48u32));
+                    let _ = bar.set_size(tauri::PhysicalSize::new(w, 56u32));
                 }
             }
 

@@ -74,7 +74,14 @@
         <div class="field" id="field-cron" hidden>
           <label>周期规则(cron)</label>
           <input id="task-cron" placeholder="0 9 * * 1-5  =  工作日每天 9:00" />
-          <div class="hint">分 时 日 月 周。工作日9点:<code>0 9 * * 1-5</code>,每天9点:<code>0 9 * * *</code></div>
+          <div class="cron-chips">
+            <button type="button" class="chip" data-cron="0 9 * * 1-5">工作日 9:00</button>
+            <button type="button" class="chip" data-cron="0 9 * * *">每天 9:00</button>
+            <button type="button" class="chip" data-cron="0 8,12,18 * * *">每天 8/12/18 点</button>
+            <button type="button" class="chip" data-cron="0 10 * * 0,6">周末 10:00</button>
+            <button type="button" class="chip" data-cron="0 21 * * *">每晚 21:00</button>
+          </div>
+          <div class="hint">分 时 日 月 周</div>
         </div>
 
         <div class="field">
@@ -102,29 +109,51 @@
     <!-- ===== 设置 ===== -->
     <section id="page-settings" class="page" hidden>
       <div class="settings-card">
-        <h3>LLM 服务商</h3>
-        <div class="field">
-          <label>预设</label>
-          <select id="set-preset"></select>
-        </div>
-        <div class="field">
-          <label>Base URL(OpenAI 兼容)</label>
-          <input id="set-baseurl" placeholder="https://api.deepseek.com" />
-        </div>
-        <div class="field">
-          <label>模型</label>
-          <input id="set-model" list="set-models" placeholder="deepseek-chat" />
-          <datalist id="set-models"></datalist>
-        </div>
-        <div class="field">
-          <label>API Key(Ollama 等本地服务可留空)</label>
-          <input id="set-key" type="password" placeholder="sk-…" />
+        <h3>LLM 服务商配置 <button id="btn-profile-add" class="btn-mini">＋ 新增</button></h3>
+        <ul id="llm-profiles" class="profile-list"></ul>
+
+        <div id="profile-form" hidden>
+          <div class="field">
+            <label>配置名称</label>
+            <input id="pf-name" placeholder="比如:我的 DeepSeek" />
+          </div>
+          <div class="field">
+            <label>预设</label>
+            <select id="set-preset"></select>
+          </div>
+          <div class="field">
+            <label>Base URL(OpenAI 兼容)</label>
+            <input id="set-baseurl" placeholder="https://api.deepseek.com" />
+          </div>
+          <div class="field">
+            <label>模型</label>
+            <input id="set-model" list="set-models" placeholder="deepseek-chat" />
+            <datalist id="set-models"></datalist>
+          </div>
+          <div class="field">
+            <label>API Key(Ollama 等本地服务可留空)</label>
+            <input id="set-key" type="password" placeholder="sk-…" />
+          </div>
+          <div class="form-actions">
+            <button id="pf-cancel" class="btn-ghost">取消</button>
+            <button id="pf-save" class="btn-primary">保存配置</button>
+          </div>
         </div>
         <div class="form-actions">
-          <button id="set-test" class="btn-ghost">测试连接</button>
-          <button id="set-save" class="btn-primary">保存</button>
+          <button id="set-test" class="btn-ghost">测试当前启用的配置</button>
         </div>
         <p id="set-msg" class="hint"></p>
+      </div>
+
+      <div class="settings-card">
+        <h3>时间轴横条</h3>
+        <div class="field">
+          <label>背景透明度:<span id="opacity-val">0.75</span></label>
+          <input id="set-opacity" type="range" min="10" max="100" value="75" />
+        </div>
+        <div class="field-inline">
+          <label><input type="checkbox" id="set-bar-visible" checked /> 显示时间轴横条</label>
+        </div>
       </div>
 
       <div class="settings-card">
@@ -133,8 +162,16 @@
           <label>键鼠无操作多少分钟后提醒(1-120)</label>
           <input id="set-threshold" type="number" min="1" max="120" placeholder="15" />
         </div>
+        <div class="form-actions">
+          <button id="set-save-misc" class="btn-primary">保存</button>
+        </div>
       </div>
     </section>
+
+    <!-- 任务详情弹窗 -->
+    <div id="detail-mask" hidden>
+      <div id="detail-card"></div>
+    </div>
 
     <!-- 时间轴 / 桌宠 / 空闲弹窗的挂载点 -->
     <div id="view-root" hidden></div>
