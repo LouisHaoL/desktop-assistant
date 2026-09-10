@@ -205,3 +205,226 @@ button.btn-primary, button.btn-ghost {
 }
 .task button:hover { border-color: var(--accent); color: var(--accent); }
 .task button.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+/* ============ 复盘 / 设置 ============ */
+.stats-box {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.7;
+  margin-bottom: 14px;
+}
+.review-out {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.8;
+  margin-top: 14px;
+  min-height: 40px;
+}
+.settings-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 14px;
+}
+.settings-card h3 { margin: 0 0 14px; font-size: 14px; }
+.settings-card .field select {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); color: var(--text); font: inherit;
+}
+
+/* ============ AI 快速创建 ============ */
+.ai-box {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.ai-title { font-weight: 700; margin-bottom: 10px; }
+.ai-box textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+.ai-row { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 10px; }
+.divider {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  margin: 18px 0;
+  position: relative;
+}
+.divider::before, .divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 40%;
+  height: 1px;
+  background: var(--line);
+}
+.divider::before { left: 0; }
+.divider::after { right: 0; }
+
+/* ============ 子窗口通用:隐藏主面板内容,只留 view-root ============ */
+body.view-alt { background: transparent; overflow: hidden; }
+body.view-alt .tabs,
+body.view-alt .page,
+body.view-alt #toasts { display: none !important; }
+
+/* ============ 时间轴横条 ============ */
+.bar {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 2px 4px 0;
+  background: #0009;
+  backdrop-filter: blur(6px);
+}
+html:not([data-theme]) body.view-alt { color-scheme: dark; }
+.bar-strip {
+  position: relative;
+  flex: 1;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.bar-ticks { position: absolute; inset: 0; }
+.bar-tick {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 1px;
+  background: #ffffff14;
+}
+.bar-tick:nth-child(6n) { background: #ffffff2e; }
+.bar-seg {
+  position: absolute;
+  height: 9px;
+  border-radius: 3px;
+  opacity: 0.9;
+}
+.bar-seg-once { border: 1px dashed #ffffff88; }
+.bar-now {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 2px;
+  background: #ff5252;
+  box-shadow: 0 0 6px #ff5252;
+  z-index: 5;
+}
+.bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: #ffffff66;
+  line-height: 1;
+  padding: 1px 0 2px;
+}
+
+/* ============ 桌宠 ============ */
+.pet-wrap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 6px;
+}
+.pet-bubble {
+  max-width: 180px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-bottom: 6px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: all 0.25s;
+  pointer-events: none;
+  text-align: center;
+}
+.pet-bubble.show { opacity: 1; transform: none; }
+.pet-body {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--card);
+  border: 2px solid var(--accent);
+  cursor: grab;
+  animation: pet-bob 2.6s ease-in-out infinite;
+}
+@keyframes pet-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+.pet-emoji { font-size: 36px; user-select: none; }
+.pet-status-dot {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.pet-status-dot.busy { background: var(--doing); animation: pulse 1.6s infinite; }
+
+/* ============ 空闲弹窗 ============ */
+body.view-alt:has(.prompt) { background: var(--bg); }
+.prompt {
+  padding: 20px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+.prompt-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 16px; }
+.prompt-head h2 { margin: 0; font-size: 18px; }
+.prompt-idle { color: var(--text-dim); font-size: 12px; }
+.prompt-label { font-size: 11px; color: var(--text-dim); }
+.prompt-doing-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.prompt-name { font-weight: 700; font-size: 15px; }
+.prompt-sub { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
+#prompt-todo { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; display: grid; gap: 6px; align-content: start; }
+.prompt-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+.prompt-task em { font-style: normal; color: var(--text-dim); font-size: 11px; margin-left: 8px; }
+.prompt-empty { color: var(--text-dim); text-align: center; padding: 20px 0; }
+.prompt-actions { display: flex; justify-content: flex-end; margin-top: 14px; }

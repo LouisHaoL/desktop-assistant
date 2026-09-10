@@ -10,9 +10,13 @@
 
   <body>
     <div id="toasts"></div>
+
+    <!-- 以下仅主窗口显示 -->
     <nav class="tabs">
-      <button id="tab-pool" class="tab active" data-tab="pool">任务池</button>
-      <button id="tab-new" class="tab" data-tab="new">＋ 新增任务</button>
+      <button class="tab active" data-tab="pool">任务池</button>
+      <button class="tab" data-tab="new">＋ 新增任务</button>
+      <button class="tab" data-tab="review">复盘</button>
+      <button class="tab" data-tab="settings">设置</button>
     </nav>
 
     <!-- ===== 任务池 ===== -->
@@ -31,6 +35,18 @@
 
     <!-- ===== 新增任务 ===== -->
     <section id="page-new" class="page" hidden>
+      <div class="ai-box">
+        <div class="ai-title">✨ AI 快速创建</div>
+        <textarea id="ai-text" rows="3" placeholder="用大白话描述,比如:
+  每个工作日早上9点背单词半小时
+  明天下午3点开周会,准备汇报材料"></textarea>
+        <div class="ai-row">
+          <span id="ai-msg" class="hint"></span>
+          <button id="btn-ai-parse" class="btn-primary">AI 解析并创建</button>
+        </div>
+      </div>
+      <div class="divider">或手动填写</div>
+
       <form id="task-form">
         <div class="field">
           <label>任务名</label>
@@ -73,5 +89,54 @@
         </div>
       </form>
     </section>
+
+    <!-- ===== 复盘 ===== -->
+    <section id="page-review" class="page" hidden>
+      <div id="review-stats" class="stats-box" hidden></div>
+      <div class="form-actions">
+        <button id="btn-ai-review" class="btn-primary">✨ AI 生成今日复盘</button>
+      </div>
+      <div id="review-out" class="review-out"></div>
+    </section>
+
+    <!-- ===== 设置 ===== -->
+    <section id="page-settings" class="page" hidden>
+      <div class="settings-card">
+        <h3>LLM 服务商</h3>
+        <div class="field">
+          <label>预设</label>
+          <select id="set-preset"></select>
+        </div>
+        <div class="field">
+          <label>Base URL(OpenAI 兼容)</label>
+          <input id="set-baseurl" placeholder="https://api.deepseek.com" />
+        </div>
+        <div class="field">
+          <label>模型</label>
+          <input id="set-model" list="set-models" placeholder="deepseek-chat" />
+          <datalist id="set-models"></datalist>
+        </div>
+        <div class="field">
+          <label>API Key(Ollama 等本地服务可留空)</label>
+          <input id="set-key" type="password" placeholder="sk-…" />
+        </div>
+        <div class="form-actions">
+          <button id="set-test" class="btn-ghost">测试连接</button>
+          <button id="set-save" class="btn-primary">保存</button>
+        </div>
+        <p id="set-msg" class="hint"></p>
+      </div>
+
+      <div class="settings-card">
+        <h3>空闲提醒</h3>
+        <div class="field">
+          <label>键鼠无操作多少分钟后提醒(1-120)</label>
+          <input id="set-threshold" type="number" min="1" max="120" placeholder="15" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 时间轴 / 桌宠 / 空闲弹窗的挂载点 -->
+    <div id="view-root" hidden></div>
   </body>
 </html>

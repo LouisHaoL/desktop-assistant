@@ -346,3 +346,49 @@ pub fn settings_set(db: tauri::State<Db>, key: String, value: String) -> Result<
     .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// 今日所有执行记录(带任务名与预估),供每日复盘与预估校准。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LogWithTask {
+    #[serde(flatten)]
+    pub log: TaskLog,
+    pub task_name: String,
+    pub estimated_minutes: Option<i64>,
+}
+
+#[tauri::command]
+pub fn logs_today(app: tauri::AppHandle) -> Result<Vec<LogWithTask>, String> {
+    use tauri::Manager;
+    let db = app.state::<Db>();
+    let day_start = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let day_start = day_start.and_local_timezone(Local).single().unwrap();
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT l.id, l.task_id, l.started_at, l.ended_at, l.actual_minutes,
+                    l.source, l.note, t.name, t.estimated_minutes
+             FROM task_logs l JOIN tasks t ON t.id = l.task_id
+             WHERE l.started_at >= ?1 ORDER BY l.id ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([day_start.to_rfc3339()], |r| {
+            Ok(LogWithTask {
+                log: TaskLog {
+                    id: r.get(0)?,
+                    task_id: r.get(1)?,
+                    started_at: r.get(2)?,
+                    ended_at: r.get(3)?,
+                    actual_minutes: r.get(4)?,
+                    source: r.get(5)?,
+                    note: r.get(6)?,
+                },
+                task_name: r.get(7)?,
+                estimated_minutes: r.get(8)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
