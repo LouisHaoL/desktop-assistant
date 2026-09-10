@@ -28,6 +28,18 @@ fn apply_click_through(app: &tauri::AppHandle, enable: bool) -> Result<(), Strin
     if let Some(state) = app.try_state::<ClickThrough>() {
         *state.0.lock().map_err(|e| e.to_string())? = enable;
     }
+    // 状态落库,重启后恢复一致
+    if let Some(db) = app.try_state::<crate::task_store::Db>() {
+        if let Ok(conn) = db.0.lock() {
+            let _ = conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('click_through', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [if enable { "1" } else { "0" }],
+            );
+        }
+    }
+    // 横条菜单里切穿透后,托盘勾选要跟着动
+    sync_tray_checks(app);
     Ok(())
 }
 
@@ -181,6 +193,12 @@ pub fn run() {
         .setup(|app| {
             // 时间轴横条/桌宠:恢复上次的位置和大小
             restore_window_geometry(app.handle());
+
+            // 恢复穿透状态(和托盘勾选、横条行为保持一致)
+            let ct_on = read_setting(app.handle(), "click_through").as_deref() == Some("1");
+            if ct_on {
+                let _ = apply_click_through(app.handle(), true);
+            }
 
             // 主面板点关闭 = 隐藏到托盘
             if let Some(main) = app.get_webview_window("main") {

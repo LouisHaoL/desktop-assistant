@@ -627,7 +627,8 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
 #profile-form[hidden] { display: none; }
 
 /* ---- 横条:整点标签 / 当前时间 / 右键菜单 ---- */
-.bar { position: relative; }
+/* 注意:.bar 的定位在上方主样式里(fixed + inset:0),这里不要再覆盖,
+   覆盖成 relative 会让 flex:1 的 .bar-strip 高度塌 0,任务色块全被裁掉 */
 .bar-tick.major { background: #ffffff2e; }
 .bar-labels { position: relative; height: 12px; }
 .bar-labels span {

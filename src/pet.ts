@@ -25,7 +25,7 @@ export function initPet() {
   root.innerHTML = `
     <div class="pet-wrap" id="pet-wrap">
       <div class="pet-bubble" id="pet-bubble">加载中…</div>
-      <div class="pet-body" id="pet-body" data-tauri-drag-region title="按住拖动;🔒 可锁定位置">
+      <div class="pet-body" id="pet-body" title="按住拖动;单击说话;🔒 可锁定位置">
         <span class="pet-emoji" id="pet-emoji">🐱</span>
         <span class="pet-status-dot" id="pet-dot"></span>
       </div>
@@ -38,21 +38,33 @@ export function initPet() {
   const lockBtn = root.querySelector<HTMLButtonElement>("#pet-lock")!;
   let msgIndex = 0;
   let statusText = "";
+  let locked = false;
 
   // ---- 锁定 / 解锁拖动,状态存 settings ----
   async function applyLock() {
-    let locked = false;
     try {
       locked = (await invoke<string | null>("settings_get", { key: "pet_locked" })) === "1";
     } catch {
-      /* 默认可拖 */
+      locked = false;
     }
-    bodyEl.draggable = false;
-    if (locked) bodyEl.removeAttribute("data-tauri-drag-region");
-    else bodyEl.setAttribute("data-tauri-drag-region", "");
     lockBtn.textContent = locked ? "🔒" : "🔓";
     lockBtn.classList.toggle("locked", locked);
   }
+
+  // ---- 手动拖拽:按住移动超过 4px 就开始拖窗口;没移动的算单击(说话) ----
+  let downPos: { x: number; y: number } | null = null;
+  bodyEl.addEventListener("mousedown", (e) => {
+    if (locked || e.button !== 0) return;
+    downPos = { x: e.clientX, y: e.clientY };
+  });
+  bodyEl.addEventListener("mousemove", (e) => {
+    if (!downPos) return;
+    if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) {
+      downPos = null;
+      void WIN.startDragging();
+    }
+  });
+  window.addEventListener("mouseup", () => (downPos = null));
 
   lockBtn.addEventListener("click", async () => {
     const locked = lockBtn.classList.contains("locked");
