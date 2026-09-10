@@ -14,14 +14,24 @@ use tauri::Manager;
 /// 注意:鼠标是否穿透不再由这个开关直接控制,而是下面的命中区域机制。
 pub struct ClickThrough(pub Mutex<bool>);
 
-/// 横条的鼠标命中区域(逻辑坐标 [x, y, w, h],相对窗口左上角)。
+/// 横条的鼠标命中区域(逻辑坐标,相对窗口左上角)。kind:
+/// "strip"=色带整体(可拖动) / "seg"=单个任务色块 / "grip"=缩放手柄 / "pop"=弹层
+#[derive(Clone, serde::Deserialize)]
+pub struct HitRegion {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub kind: String,
+}
+
 /// 前端渲染后上报;只有区域内吃点击,其余部分穿透,空白处不挡桌面。
-pub struct HitRegions(pub Mutex<Vec<[f64; 4]>>);
+pub struct HitRegions(pub Mutex<Vec<HitRegion>>);
 
 /// 前端上报横条命中区域
 #[tauri::command]
 fn set_bar_hit_regions(
-    regions: Vec<[f64; 4]>,
+    regions: Vec<HitRegion>,
     state: tauri::State<HitRegions>,
 ) -> Result<(), String> {
     *state.0.lock().map_err(|e| e.to_string())? = regions;
@@ -63,6 +73,7 @@ fn apply_click_through(app: &tauri::AppHandle, enable: bool) -> Result<(), Strin
 /// 区域外(含整窗透明部分)整体穿透。弹层打开时其矩形也在区域内,不会被裁也不会挤压时间轴。
 #[cfg(windows)]
 fn spawn_hit_monitor(app: tauri::AppHandle) {
+    use tauri::Emitter;
     use windows::Win32::Foundation::POINT;
     use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
     std::thread::spawn(move || {
@@ -92,25 +103,25 @@ fn spawn_hit_monitor(app: tauri::AppHandle) {
             let ly = f64::from(pt.y - pos.y) / sc;
             let lw = f64::from(size.width) / sc;
             let lh = f64::from(size.height) / sc;
+            let regions = app
+                .try_state::<HitRegions>()
+                .and_then(|s| s.0.lock().ok().map(|g| g.clone()))
+                .unwrap_or_default();
             let inside = lx >= 0.0
                 && ly >= 0.0
                 && lx <= lw
                 && ly <= lh
-                && app
-                    .try_state::<HitRegions>()
-                    .map(|s| {
-                        s.0.lock()
-                            .map(|regions| {
-                                regions
-                                    .iter()
-                                    .any(|r| lx >= r[0] && ly >= r[1] && lx <= r[0] + r[2] && ly <= r[1] + r[3])
-                            })
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false);
+                && regions
+                    .iter()
+                    .any(|r| lx >= r.x && ly >= r.y && lx <= r.x + r.w && ly <= r.y + r.h);
             if inside != interactive {
                 let _ = win.set_ignore_cursor_events(!inside);
                 interactive = inside;
+            }
+            // 弹层开着时,光标移出所有区域(点到桌面/别处)→ 通知横条收起弹层。
+            // 窗口在区域外是穿透的,页面收不到 mousedown,只能由这里补一刀。
+            if !inside && regions.iter().any(|r| r.kind == "pop") {
+                let _ = win.emit("bar-pops-dismiss", ());
             }
         }
     });
@@ -318,6 +329,8 @@ pub fn run() {
     app.manage(ClickThrough(Mutex::new(ct_on)));
     app.manage(HitRegions(Default::default()));
     spawn_hit_monitor(app.handle().clone());
+    // 托盘勾选与恢复出的穿透状态对齐
+    sync_tray_checks(app.handle());
 
     app.run(|_app, _event| {});
 }

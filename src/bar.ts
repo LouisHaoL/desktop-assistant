@@ -63,6 +63,7 @@ export function initBar() {
       <div class="bar-pop" id="bar-menu" hidden>
         <button type="button" data-act="click-through"></button>
         <button type="button" data-act="view-mode"></button>
+        <button type="button" data-act="open-settings">⚙ 设置</button>
         <button type="button" data-act="open-main">📋 打开主面板</button>
         <button type="button" data-act="hide-bar">✕ 隐藏横条(托盘里恢复)</button>
       </div>
@@ -109,16 +110,21 @@ export function initBar() {
   }
 
   // ---- 命中区域:把这些矩形报给 Rust,区域内可点、其余穿透 ----
+  // 穿透模式:色带整体不作为区域,只保留每个任务色块——空白处直接穿透桌面
   async function updateRegions() {
-    const regions: [number, number, number, number][] = [];
-    const push = (el: HTMLElement) => {
+    const regions: { x: number; y: number; w: number; h: number; kind: string }[] = [];
+    const push = (el: HTMLElement, kind: string) => {
       const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) regions.push([r.left, r.top, r.width, r.height]);
+      if (r.width > 0 && r.height > 0) regions.push({ x: r.left, y: r.top, w: r.width, h: r.height, kind });
     };
-    push(strip);
-    if (!ct) push(gripEl);
-    if (!menuEl.hidden) push(menuEl);
-    if (!panelEl.hidden) push(panelEl);
+    if (ct) {
+      strip.querySelectorAll<HTMLElement>(".bar-seg").forEach((seg) => push(seg, "seg"));
+    } else {
+      push(strip, "strip");
+      push(gripEl, "grip");
+    }
+    if (!menuEl.hidden) push(menuEl, "pop");
+    if (!panelEl.hidden) push(panelEl, "pop");
     try {
       await invoke("set_bar_hit_regions", { regions });
     } catch {
@@ -434,6 +440,14 @@ export function initBar() {
       await invoke("settings_set", { key: "bar_view_mode", value: viewMode }).catch(() => {});
       updateModeBtn();
       void render();
+    } else if (act === "open-settings") {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const main = await WebviewWindow.getByLabel("main");
+      if (main) {
+        await main.show();
+        await main.setFocus();
+      }
+      await emit("open-settings", {});
     } else if (act === "open-main") {
       const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const main = await WebviewWindow.getByLabel("main");
@@ -468,6 +482,8 @@ export function initBar() {
     showToast(`⏰ ${e.payload.at} ${e.payload.name}`);
   });
   void listen("tasks-changed", () => void render());
+  // 光标移出所有命中区域(点到桌面等)时由后端通知收起弹层
+  void listen("bar-pops-dismiss", () => closePops());
   // 托盘/外部改动穿透状态后同步手柄与拖动
   void listen("bar-settings-changed", () => {
     void refreshCt();

@@ -608,6 +608,9 @@ if (label === "timeline-bar") {
     void refresh();
   });
 
+  // 横条右键「设置」:跳到设置页
+  listen("open-settings", () => switchTab("settings"));
+
   document.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) =>
     b.addEventListener("click", () => switchTab(b.dataset.tab!))
   );
