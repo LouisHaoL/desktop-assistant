@@ -173,16 +173,12 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // 先 build 再 manage 再 run:配置里的窗口在 run 阶段才创建,
+    // 这样窗口页面一发 invoke,Db 等状态就已就位(否则命令里 state::<Db>() 会 panic)
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let db = task_store::init_db(app.handle()).expect("数据库初始化失败");
-            app.manage(db);
-            app.manage(FiredKeys(Default::default()));
-            app.manage(IdlePrompted(Default::default()));
-            app.manage(ClickThrough(Mutex::new(false)));
-
             // 时间轴横条/桌宠:恢复上次的位置和大小
             restore_window_geometry(app.handle());
 
@@ -220,6 +216,14 @@ pub fn run() {
             llm::llm_chat,
             set_click_through
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    let db = task_store::init_db(app.handle()).expect("数据库初始化失败");
+    app.manage(db);
+    app.manage(FiredKeys(Default::default()));
+    app.manage(IdlePrompted(Default::default()));
+    app.manage(ClickThrough(Mutex::new(false)));
+
+    app.run(|_app, _event| {});
 }
