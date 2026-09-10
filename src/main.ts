@@ -96,36 +96,36 @@ async function refresh() {
     const li = document.createElement("li");
     li.className = `task task-${t.status}`;
 
+    // 状态徽章放最前面
+    const badge = document.createElement("span");
+    badge.className = `badge badge-status${
+      t.status === "doing" ? " badge-doing" : t.status === "done" ? " badge-done" : " badge-todo"
+    }`;
+    badge.textContent =
+      t.status === "done"
+        ? "✓ 已完成"
+        : t.status === "doing"
+          ? "● 进行中"
+          : t.status === "skipped"
+            ? "已跳过"
+            : "待办";
+
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = t.name;
     name.onclick = () => showDetail(t);
 
-    const badge = document.createElement("span");
-    const base =
-      t.status === "doing" ? " badge-doing" : t.kind === "recurring" ? " badge-recurring" : "";
-    badge.className = `badge${base}`;
-    badge.textContent =
-      t.status === "done"
-        ? "✓ 已完成"
-        : t.status === "doing"
-          ? "进行中"
-          : t.kind === "recurring"
-            ? "周期"
-            : "一次性";
-    if (t.status === "done") badge.classList.add("badge-done");
-
     const detail = document.createElement("span");
     detail.className = "detail";
     const when =
       t.kind === "recurring"
-        ? `cron ${t.cron}`
+        ? `周期 · cron ${t.cron}`
         : t.once_due
-          ? new Date(t.once_due).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })
-          : "未定时间";
+          ? `一次性 · ${new Date(t.once_due).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}`
+          : "一次性 · 未定时间";
     detail.textContent = `${when}${t.estimated_minutes ? ` · 约 ${t.estimated_minutes} 分钟` : ""}`;
 
-    li.append(name, badge, detail);
+    li.append(badge, name, detail);
 
     if (t.status === "todo") {
       const startBtn = document.createElement("button");
@@ -558,6 +558,11 @@ if (label === "timeline-bar") {
   listen<{ id: number; name: string; content: string | null; at: string }>("task-due", (e) => {
     toast(`⏰ ${e.payload.at} 到点了`, e.payload.name);
     refresh();
+  });
+
+  // 横条/空闲弹窗里做了开始/暂停/完成后,任务池同步刷新
+  listen("tasks-changed", () => {
+    void refresh();
   });
 
   document.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) =>

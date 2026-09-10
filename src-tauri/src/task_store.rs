@@ -99,7 +99,7 @@ pub fn init_db(app: &AppHandle) -> Result<Db, String> {
     Ok(Db(Mutex::new(conn)))
 }
 
-fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
+pub fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -116,7 +116,7 @@ fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
     })
 }
 
-const TASK_COLS: &str = "id, name, content, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due";
+pub const TASK_COLS: &str = "id, name, content, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due";
 
 #[tauri::command]
 pub fn task_create(
@@ -285,6 +285,47 @@ pub fn task_finish(db: tauri::State<Db>, log_id: i64) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     tx.execute(
         "UPDATE tasks SET status='done' WHERE id=?1",
+        params![task_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 暂停一条任务:回填当前执行记录但不标记完成,任务回 todo。
+#[tauri::command]
+pub fn task_pause(db: tauri::State<Db>, log_id: i64) -> Result<(), String> {
+    let mut conn = db.0.lock().map_err(|e| e.to_string())?;
+    let now = Local::now().to_rfc3339();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let task_id: Option<i64> = tx
+        .query_row(
+            "SELECT task_id FROM task_logs WHERE id=?1",
+            params![log_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(task_id) = task_id else {
+        return Err(format!("执行记录 {log_id} 不存在"));
+    };
+    let started: String = tx
+        .query_row(
+            "SELECT started_at FROM task_logs WHERE id=?1",
+            params![log_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let minutes = chrono::DateTime::parse_from_rfc3339(&started)
+        .ok()
+        .map(|s| ((now_epoch_seconds() - s.timestamp()) / 60).max(0));
+    tx.execute(
+        "UPDATE task_logs SET ended_at=?1, actual_minutes=?2 WHERE id=?3",
+        params![now, minutes, log_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE tasks SET status='todo' WHERE id=?1",
         params![task_id],
     )
     .map_err(|e| e.to_string())?;

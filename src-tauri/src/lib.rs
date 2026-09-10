@@ -7,7 +7,7 @@ use idle::IdlePrompted;
 use scheduler::FiredKeys;
 use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 /// 横条当前是否鼠标穿透(Windows API 无反向查询,自己记账)
@@ -66,6 +66,45 @@ fn sync_tray_checks(app: &tauri::AppHandle) {
     }
 }
 
+/// 从 settings 读窗口几何(bar_x/bar_y/bar_w/bar_h、pet_x/pet_y)
+fn read_setting(app: &tauri::AppHandle, key: &str) -> Option<String> {
+    let db = app.try_state::<crate::task_store::Db>()?;
+    let conn = db.0.lock().ok()?;
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
+}
+
+fn read_f(app: &tauri::AppHandle, key: &str) -> Option<f64> {
+    read_setting(app, key)?.trim().parse().ok()
+}
+
+/// 启动时恢复横条/桌宠的上次位置和大小(没存过就用默认布局)
+fn restore_window_geometry(app: &tauri::AppHandle) {
+    if let Some(bar) = app.get_webview_window("timeline-bar") {
+        let w = read_f(app, "bar_w");
+        let h = read_f(app, "bar_h");
+        let x = read_f(app, "bar_x");
+        let y = read_f(app, "bar_y");
+        if let (Some(w), Some(h)) = (w, h) {
+            let _ = bar.set_size(tauri::LogicalSize::new(w.max(320.0), h.max(32.0)));
+        } else if let Ok(Some(monitor)) = bar.primary_monitor() {
+            let _ = bar.set_size(tauri::PhysicalSize::new(monitor.size().width, 56u32));
+        }
+        if let (Some(x), Some(y)) = (x, y) {
+            let _ = bar.set_position(tauri::LogicalPosition::new(x, y));
+        } else {
+            let _ = bar.set_position(tauri::PhysicalPosition::new(0i32, 0i32));
+        }
+    }
+    if let Some(pet) = app.get_webview_window("pet") {
+        if let (Some(x), Some(y)) = (read_f(app, "pet_x"), read_f(app, "pet_y")) {
+            let _ = pet.set_position(tauri::LogicalPosition::new(x, y));
+        }
+    }
+}
+
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show_bar = CheckMenuItem::with_id(app, "show_bar", "显示时间轴横条", true, true, None::<&str>)?;
     let show_pet = CheckMenuItem::with_id(app, "show_pet", "显示桌宠", true, false, None::<&str>)?;
@@ -75,11 +114,33 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_bar, &click_through, &show_pet, &show_main, &quit])?;
 
+    // 双击托盘图标 = 打开主界面(这个版本没有 click_count,自己按间隔判)
+    let last_left_click = std::sync::Mutex::new(None::<std::time::Instant>);
     TrayIconBuilder::with_id("main-tray")
         .icon(app.default_window_icon().expect("缺少应用图标").clone())
         .tooltip("桌面小助理")
         .menu(&menu)
         .show_menu_on_left_click(false)
+        .on_tray_icon_event(move |tray, event| {
+            if let TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let mut last = last_left_click.lock().unwrap();
+                let now = std::time::Instant::now();
+                let double = matches!(*last, Some(t) if now.duration_since(t).as_millis() < 500);
+                *last = Some(now);
+                if double {
+                    *last = None;
+                    if let Some(win) = tray.app_handle().get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                }
+            }
+        })
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show_bar" => toggle_bar_visible(app),
             "show_pet" => {
@@ -122,14 +183,8 @@ pub fn run() {
             app.manage(IdlePrompted(Default::default()));
             app.manage(ClickThrough(Mutex::new(false)));
 
-            // 时间轴横条:铺满主屏顶部
-            if let Some(bar) = app.get_webview_window("timeline-bar") {
-                if let Ok(Some(monitor)) = bar.primary_monitor() {
-                    let w = monitor.size().width;
-                    let _ = bar.set_position(tauri::PhysicalPosition::new(0i32, 0i32));
-                    let _ = bar.set_size(tauri::PhysicalSize::new(w, 56u32));
-                }
-            }
+            // 时间轴横条/桌宠:恢复上次的位置和大小
+            restore_window_geometry(app.handle());
 
             // 主面板点关闭 = 隐藏到托盘
             if let Some(main) = app.get_webview_window("main") {
@@ -155,6 +210,7 @@ pub fn run() {
             task_store::task_update,
             task_store::task_delete,
             task_store::task_start,
+            task_store::task_pause,
             task_store::task_finish,
             task_store::task_logs_for,
             task_store::logs_today,

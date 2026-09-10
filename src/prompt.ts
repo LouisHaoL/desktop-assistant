@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface Task {
@@ -49,10 +49,12 @@ export function initPrompt() {
     });
     const open = logs.find((l) => !l.ended_at);
     if (open) await invoke("task_finish", { logId: open.id });
+    await emit("tasks-changed", {});
   }
 
   async function startTask(id: number) {
     await invoke("task_start", { id, source: "idle_prompt" });
+    await emit("tasks-changed", {});
     win.hide();
   }
 
