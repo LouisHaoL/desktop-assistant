@@ -17,38 +17,39 @@
 
 ## 跨平台支持
 
-基于 Tauri 2,代码可在 Windows / macOS / Linux 三平台编译运行,但有部分功能依赖 Windows API,在其他平台当前受限:
+基于 Tauri 2,Windows / macOS / Linux(X11)均可编译运行。推送 `v*` 标签时 [GitHub Actions](.github/workflows/release.yml) 会自动构建三平台安装包并发布 Release。
 
 | 功能 | Windows | macOS | Linux (X11) | Linux (Wayland) |
 |------|:-------:|:-----:|:-----------:|:---------------:|
 | 时间轴 / 桌宠 / 任务池 / 插件 / LLM | ✅ | ✅ | ✅ | ⚠️ 透明窗口受限 |
-| 鼠标穿透(色块外区域穿透) | ✅ | ❌ | ❌ | ❌ |
-| 空闲检测(空闲提醒触发) | ✅ | ❌ | ❌ | ❌ |
+| 鼠标穿透(色块外区域穿透) | ✅ | ✅ | ✅ | ❌ 无全局光标 |
+| 空闲检测(空闲提醒触发) | ✅ | ✅ | ✅ | ⚠️ XWayland 下可能偏大 |
 
-两个 Windows 专属功能的现状:
+平台相关实现的位置:
 
-- **鼠标穿透**:通过 `GetCursorPos` 轮询光标位置,实现"色块区域内可交互、透明区域穿透"(`src-tauri/src/lib.rs` 的 `spawn_hit_monitor`)。其他平台为空实现,横条透明区域会挡住下方点击。注:`set_ignore_cursor_events` 本身是跨平台 API,只差光标位置获取的跨平台实现。
-- **空闲检测**:Windows 使用 `GetLastInputInfo`;其他平台恒返回 0,空闲提醒不会触发。待接入 macOS `CGEventSourceSecondsSinceLastEventType` / Linux X11 空闲查询(`src-tauri/src/idle.rs` 中留有 TODO)。
+- **鼠标穿透**:`src-tauri/src/lib.rs` 的 `spawn_hit_monitor` 轮询光标位置,色块区域内可交互、透明区域穿透。光标位置用 Tauri 跨平台 API `cursor_position()`(Windows / macOS / X11 支持;Wayland 没有全局光标概念,拿不到时跳过该轮检测)。
+- **空闲检测**:`src-tauri/src/idle.rs` — Windows 用 `GetLastInputInfo`,macOS 用 CoreGraphics `CGEventSourceSecondsSinceLastEventType`(纯 FFI,无额外依赖),Linux 用 X11 XScreenSaver 扩展(链接 `libXss`,运行时需 `libxss1`)。
 
 ### 各平台构建
 
-构建必须在目标平台上进行(macOS 无法从 Windows/Linux 交叉编译),推荐用 GitHub Actions 三平台矩阵。打包前需按平台调整 `src-tauri/tauri.conf.json` 的 `bundle.targets`:当前为 `["nsis"]`(仅 Windows),macOS 应改为 `["dmg", "app"]`,Linux 应改为 `["deb", "appimage"]`。
+构建必须在目标平台上进行(macOS 无法从 Windows/Linux 交叉编译)。打包目标已按平台拆分:主配置 `tauri.conf.json` 为 `["nsis"]`(Windows),macOS 用 `tauri.macos.conf.json`(`dmg`/`app`),Linux 用 `tauri.linux.conf.json`(`appimage`/`deb`),即:
 
-**Windows**(功能完整,推荐):
-
-```powershell
-npm install
-npm run tauri build    # 产物在 src-tauri/target/release/bundle/nsis/
+```bash
+npm run tauri build -- --config src-tauri/tauri.macos.conf.json   # macOS
+npm run tauri build -- --config src-tauri/tauri.linux.conf.json   # Linux
+npm run tauri build                                               # Windows
 ```
+
+**Windows**(推荐,功能完整):
 
 前置:Node 18+、Rust(stable-msvc)、VS Build Tools + Windows SDK。
 
-**macOS**(可编译运行,见上表功能限制):
+**macOS**(Intel 与 Apple Silicon,CI 产出通用二进制):
 
 ```bash
 xcode-select --install   # 命令行工具
 npm install
-npm run tauri build      # 需先把 targets 改为 ["dmg","app"]
+npm run tauri build -- --target universal-apple-darwin --config src-tauri/tauri.macos.conf.json
 ```
 
 未签名 app 首次打开需右键 → 打开;对外分发需开发者证书签名 + 公证。
@@ -57,12 +58,13 @@ npm run tauri build      # 需先把 targets 改为 ["dmg","app"]
 
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+  patchelf libxss-dev
 npm install
-npm run tauri build      # 需先把 targets 改为 ["deb","appimage"]
+npm run tauri build -- --config src-tauri/tauri.linux.conf.json
 ```
 
-托盘功能依赖 libappindicator;Wayland 下透明/无边框窗口受限,建议 X11 会话。
+托盘功能依赖 libappindicator;空闲检测链接 `libXss`(构建装 `libxss-dev`,运行需 `libxss1`);Wayland 下透明/无边框窗口与穿透受限,建议 X11 会话。
 
 ## 开发
 

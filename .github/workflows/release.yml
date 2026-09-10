@@ -1,0 +1,80 @@
+name: release
+
+# 推送 v* 标签触发三平台构建;构建产物先挂到 draft release,全部成功后统一发布
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS 通用二进制(Intel + Apple Silicon 一个 dmg)
+          - platform: macos-latest
+            args: --target universal-apple-darwin --config src-tauri/tauri.macos.conf.json
+          # AppImage 依赖 glibc 较低版本以兼容更多发行版,固定 22.04
+          - platform: ubuntu-22.04
+            args: --config src-tauri/tauri.linux.conf.json
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: 安装 Linux 构建依赖
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libxss-dev
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 桌面小助理 v__VERSION__
+          releaseBody: |
+            跨平台构建产物:
+
+            - **Windows**:`*-setup.exe`(NSIS 安装包,功能完整)
+            - **macOS**:`*.dmg`(Intel + Apple Silicon 通用,未签名,首次打开需右键 → 打开)
+            - **Linux**:`*.AppImage` / `*.deb`(X11 会话;Wayland 下穿透与空闲检测受限)
+
+            macOS 与 Linux 未做代码签名,系统如有安全提示,请按 README「各平台构建」章节的说明处理。
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  publish-release:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: 三平台产物齐了,把 draft release 转正
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          gh release edit "v$VERSION" --draft=false

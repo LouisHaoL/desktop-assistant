@@ -19,9 +19,100 @@ fn get_idle_ms() -> u64 {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS:CoreGraphics 合并会话状态下,距最后一次任意输入事件(键/鼠/触摸)的秒数。
+#[cfg(target_os = "macos")]
 fn get_idle_ms() -> u64 {
-    // TODO: macOS CGEventSourceSecondsSinceLastEventType / Linux X11 idle
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        // kCGEventSourceStateCombinedSessionState = -1;kCGAnyInputEventType = ~0u32,匹配所有输入事件
+        fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+    }
+    // 纯查询函数,无指针参数,不会失败
+    let secs = unsafe { CGEventSourceSecondsSinceLastEventType(-1, u32::MAX) };
+    if secs.is_finite() && secs > 0.0 {
+        (secs * 1000.0) as u64
+    } else {
+        0
+    }
+}
+
+/// Linux:X11 XScreenSaver 扩展查询根窗口空闲时间(毫秒)。
+/// 需要 libxss 运行时(libxss1);Wayland 会话下经 XWayland 只统计 X11 输入,数值可能偏大。
+#[cfg(target_os = "linux")]
+fn get_idle_ms() -> u64 {
+    use std::os::raw::{c_int, c_ulong, c_void};
+    use std::sync::OnceLock;
+
+    #[repr(C)]
+    struct XScreenSaverInfo {
+        window: c_ulong,
+        state: c_int,
+        kind: c_int,
+        til_or_since: c_ulong,
+        idle: c_ulong,
+        event_mask: c_ulong,
+    }
+
+    #[link(name = "X11")]
+    extern "C" {
+        fn XOpenDisplay(name: *const c_void) -> *mut c_void;
+        fn XCloseDisplay(dpy: *mut c_void) -> c_int;
+        fn XDefaultRootWindow(dpy: *mut c_void) -> c_ulong;
+        fn XFree(data: *mut c_void) -> c_int;
+    }
+    #[link(name = "Xss")]
+    extern "C" {
+        fn XScreenSaverAllocInfo() -> *mut XScreenSaverInfo;
+        fn XScreenSaverQueryInfo(
+            dpy: *mut c_void,
+            drawable: c_ulong,
+            info: *mut XScreenSaverInfo,
+        ) -> c_int;
+    }
+
+    /// Display 连接与 info 缓冲只建一次,常驻进程生命周期
+    struct X11Ctx {
+        dpy: *mut c_void,
+        info: *mut XScreenSaverInfo,
+    }
+    unsafe impl Send for X11Ctx {}
+    unsafe impl Sync for X11Ctx {}
+    impl Drop for X11Ctx {
+        fn drop(&mut self) {
+            unsafe {
+                XFree(self.info.cast());
+                XCloseDisplay(self.dpy);
+            }
+        }
+    }
+
+    static CTX: OnceLock<Option<X11Ctx>> = OnceLock::new();
+    let Some(ctx) = CTX.get_or_init(|| {
+        unsafe {
+            let dpy = XOpenDisplay(std::ptr::null());
+            if dpy.is_null() {
+                return None; // 无 X 显示(纯 Wayland/无头环境):始终视为"有活动"
+            }
+            let info = XScreenSaverAllocInfo();
+            if info.is_null() {
+                XCloseDisplay(dpy);
+                return None;
+            }
+            Some(X11Ctx { dpy, info })
+        }
+    }) else {
+        return 0;
+    };
+    unsafe {
+        if XScreenSaverQueryInfo(ctx.dpy, XDefaultRootWindow(ctx.dpy), ctx.info) == 0 {
+            return 0;
+        }
+        (*ctx.info).idle as u64
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+fn get_idle_ms() -> u64 {
     0
 }
 

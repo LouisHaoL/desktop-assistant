@@ -72,11 +72,9 @@ fn apply_click_through(app: &tauri::AppHandle, enable: bool) -> Result<(), Strin
 
 /// 命中区域监视:每 60ms 查一次光标位置,在区域内窗口可交互,
 /// 区域外(含整窗透明部分)整体穿透。弹层打开时其矩形也在区域内,不会被裁也不会挤压时间轴。
-#[cfg(windows)]
+/// 光标位置用 Tauri 的 cursor_position()(Windows/macOS/X11 通用;Wayland 无全局光标概念,拿不到时本轮跳过)。
 fn spawn_hit_monitor(app: tauri::AppHandle) {
     use tauri::Emitter;
-    use windows::Win32::Foundation::POINT;
-    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
     std::thread::spawn(move || {
         let mut interactive = false;
         // 窗口创建后默认是"捕获鼠标"的,首轮必须显式设一次穿透,
@@ -94,17 +92,16 @@ fn spawn_hit_monitor(app: tauri::AppHandle) {
                 }
                 continue;
             }
-            let (Ok(pos), Ok(sc), Ok(size)) =
-                (win.outer_position(), win.scale_factor(), win.outer_size())
-            else {
+            let (Ok(cursor), Ok(sc), Ok(size), Ok(pos)) = (
+                app.cursor_position(),
+                win.scale_factor(),
+                win.outer_size(),
+                win.outer_position(),
+            ) else {
                 continue;
             };
-            let mut pt = POINT { x: 0, y: 0 };
-            unsafe {
-                let _ = GetCursorPos(&mut pt);
-            }
-            let lx = f64::from(pt.x - pos.x) / sc;
-            let ly = f64::from(pt.y - pos.y) / sc;
+            let lx = (cursor.x - f64::from(pos.x)) / sc;
+            let ly = (cursor.y - f64::from(pos.y)) / sc;
             let lw = f64::from(size.width) / sc;
             let lh = f64::from(size.height) / sc;
             let regions = app
@@ -131,9 +128,6 @@ fn spawn_hit_monitor(app: tauri::AppHandle) {
         }
     });
 }
-
-#[cfg(not(windows))]
-fn spawn_hit_monitor(_app: tauri::AppHandle) {}
 
 /// 显示/隐藏横条并把状态落库(设置页复选框、托盘、横条右键菜单共用这一份 bar_visible)
 fn set_bar_visible(app: &tauri::AppHandle, show: bool) {
