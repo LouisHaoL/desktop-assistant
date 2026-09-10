@@ -9,6 +9,7 @@
   </head>
 
   <body>
+    <div id="toasts"></div>
     <nav class="tabs">
       <button id="tab-pool" class="tab active" data-tab="pool">任务池</button>
       <button id="tab-new" class="tab" data-tab="new">＋ 新增任务</button>
@@ -34,6 +35,11 @@
         <div class="field">
           <label>任务名</label>
           <input id="task-name" placeholder="比如:背单词 / 写周报" required />
+        </div>
+
+        <div class="field">
+          <label>任务内容(可选,详细说明)</label>
+          <textarea id="task-content" rows="3" placeholder="具体做什么、链接、注意事项…"></textarea>
         </div>
 
         <div class="field">

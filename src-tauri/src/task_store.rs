@@ -10,6 +10,8 @@ use tauri::{AppHandle, Manager};
 pub struct Task {
     pub id: i64,
     pub name: String,
+    /// 详细内容/备注,任务名的补充说明
+    pub content: Option<String>,
     /// "recurring" | "once"
     pub kind: String,
     /// cron 表达式,如 "0 9 * * 1-5"(分 时 日 月 周)
@@ -55,6 +57,7 @@ pub fn init_db(app: &AppHandle) -> Result<Db, String> {
          CREATE TABLE IF NOT EXISTS tasks (
            id INTEGER PRIMARY KEY,
            name TEXT NOT NULL,
+           content TEXT,
            kind TEXT NOT NULL CHECK (kind IN ('recurring','once')),
            cron TEXT,
            start_time TEXT,
@@ -81,6 +84,18 @@ pub fn init_db(app: &AppHandle) -> Result<Db, String> {
          );",
     )
     .map_err(|e| format!("初始化表结构失败: {e}"))?;
+    // 旧库迁移:补 content 列
+    let has_content: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='content'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if has_content == 0 {
+        conn.execute_batch("ALTER TABLE tasks ADD COLUMN content TEXT;")
+            .map_err(|e| format!("迁移 content 列失败: {e}"))?;
+    }
     Ok(Db(Mutex::new(conn)))
 }
 
@@ -88,25 +103,26 @@ fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
         id: r.get(0)?,
         name: r.get(1)?,
-        kind: r.get(2)?,
-        cron: r.get(3)?,
-        start_time: r.get(4)?,
-        estimated_minutes: r.get(5)?,
-        priority: r.get(6)?,
-        pinned: r.get::<_, i64>(7)? != 0,
-        status: r.get(8)?,
-        created_at: r.get(9)?,
-        once_due: r.get(10)?,
+        content: r.get(2)?,
+        kind: r.get(3)?,
+        cron: r.get(4)?,
+        start_time: r.get(5)?,
+        estimated_minutes: r.get(6)?,
+        priority: r.get(7)?,
+        pinned: r.get::<_, i64>(8)? != 0,
+        status: r.get(9)?,
+        created_at: r.get(10)?,
+        once_due: r.get(11)?,
     })
 }
 
-const TASK_COLS: &str =
-    "id, name, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due";
+const TASK_COLS: &str = "id, name, content, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due";
 
 #[tauri::command]
 pub fn task_create(
     db: tauri::State<Db>,
     name: String,
+    content: Option<String>,
     kind: String,
     cron: Option<String>,
     start_time: Option<String>,
@@ -121,12 +137,16 @@ pub fn task_create(
         return Err("周期任务必须提供 cron 表达式".into());
     }
     let now = Local::now().to_rfc3339();
+    let content = content
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT INTO tasks (name, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 'todo', ?7, ?8)",
+        "INSERT INTO tasks (name, content, kind, cron, start_time, estimated_minutes, priority, pinned, status, created_at, once_due)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 'todo', ?8, ?9)",
         params![
             name.trim(),
+            content,
             kind,
             cron,
             start_time,
@@ -141,6 +161,7 @@ pub fn task_create(
     Ok(Task {
         id,
         name: name.trim().to_string(),
+        content,
         kind,
         cron,
         start_time,
@@ -175,11 +196,12 @@ pub fn task_update(db: tauri::State<Db>, task: Task) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let n = conn
         .execute(
-            "UPDATE tasks SET name=?1, kind=?2, cron=?3, start_time=?4,
-             estimated_minutes=?5, priority=?6, pinned=?7, status=?8, once_due=?9
-             WHERE id=?10",
+            "UPDATE tasks SET name=?1, content=?2, kind=?3, cron=?4, start_time=?5,
+             estimated_minutes=?6, priority=?7, pinned=?8, status=?9, once_due=?10
+             WHERE id=?11",
             params![
                 task.name,
+                task.content,
                 task.kind,
                 task.cron,
                 task.start_time,
@@ -299,4 +321,28 @@ pub fn task_logs_for(db: tauri::State<Db>, task_id: i64) -> Result<Vec<TaskLog>,
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
     Ok(rows)
+}
+
+#[tauri::command]
+pub fn settings_get(db: tauri::State<Db>, key: String) -> Result<Option<String>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT value FROM settings WHERE key=?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn settings_set(db: tauri::State<Db>, key: String, value: String) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![key, value],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }

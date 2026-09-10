@@ -1,8 +1,22 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+function toast(title: string, body: string, ms = 8000) {
+  const box = document.querySelector<HTMLDivElement>("#toasts")!;
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.innerHTML = `<div class="toast-title"></div><div class="toast-body"></div>`;
+  el.querySelector<HTMLElement>(".toast-title")!.textContent = title;
+  el.querySelector<HTMLElement>(".toast-body")!.textContent = body;
+  el.onclick = () => el.remove();
+  box.append(el);
+  setTimeout(() => el.remove(), ms);
+}
 
 interface Task {
   id: number;
   name: string;
+  content: string | null;
   kind: "recurring" | "once";
   cron: string | null;
   start_time: string | null;
@@ -72,6 +86,11 @@ async function refresh() {
 
     const detail = document.createElement("span");
     detail.className = "detail";
+    if (t.content) {
+      li.title = t.content;
+      name.style.borderBottom = "1px dotted currentColor";
+      name.style.cursor = "help";
+    }
     const when =
       t.kind === "recurring"
         ? `cron ${t.cron}`
@@ -105,6 +124,11 @@ async function refresh() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  listen<{ id: number; name: string; content: string | null; at: string }>("task-due", (e) => {
+    toast(`⏰ ${e.payload.at} 到点了`, e.payload.name);
+    refresh();
+  });
+
   document.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) =>
     b.addEventListener("click", () => switchTab(b.dataset.tab as "pool" | "new"))
   );
@@ -131,6 +155,7 @@ window.addEventListener("DOMContentLoaded", () => {
     try {
       await invoke("task_create", {
         name: form["task-name"].value,
+        content: form["task-content"].value || null,
         kind: form.kind.value,
         cron: form.kind.value === "recurring" ? form["task-cron"].value : null,
         start_time: null,
