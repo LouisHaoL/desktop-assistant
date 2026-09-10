@@ -1,43 +1,71 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <title>桌面小助理</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
 
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
+    <nav class="tabs">
+      <button id="tab-pool" class="tab active" data-tab="pool">任务池</button>
+      <button id="tab-new" class="tab" data-tab="new">＋ 新增任务</button>
+    </nav>
 
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
+    <!-- ===== 任务池 ===== -->
+    <section id="page-pool" class="page">
+      <div id="doing-banner" hidden>
+        <span class="pulse"></span>
+        <div class="doing-info">
+          <div class="doing-label">进行中</div>
+          <div id="doing-name"></div>
+        </div>
+        <button id="btn-finish" class="btn-primary">完成</button>
       </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+      <ul id="task-list"></ul>
+      <p id="empty-hint" class="empty" hidden>任务池是空的,点上方「＋ 新增任务」添加一个吧</p>
+    </section>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
+    <!-- ===== 新增任务 ===== -->
+    <section id="page-new" class="page" hidden>
+      <form id="task-form">
+        <div class="field">
+          <label>任务名</label>
+          <input id="task-name" placeholder="比如:背单词 / 写周报" required />
+        </div>
+
+        <div class="field">
+          <label>类型</label>
+          <div class="segmented">
+            <label><input type="radio" name="kind" value="once" checked /><span>一次性</span></label>
+            <label><input type="radio" name="kind" value="recurring" /><span>周期性</span></label>
+          </div>
+        </div>
+
+        <div class="field" id="field-due">
+          <label>什么时候做</label>
+          <input id="task-due" type="datetime-local" />
+        </div>
+
+        <div class="field" id="field-cron" hidden>
+          <label>周期规则(cron)</label>
+          <input id="task-cron" placeholder="0 9 * * 1-5  =  工作日每天 9:00" />
+          <div class="hint">分 时 日 月 周。工作日9点:<code>0 9 * * 1-5</code>,每天9点:<code>0 9 * * *</code></div>
+        </div>
+
+        <div class="field">
+          <label>预估时长(分钟)</label>
+          <input id="task-est" type="number" min="1" placeholder="30" />
+        </div>
+
+        <p id="task-err" class="err"></p>
+        <div class="form-actions">
+          <button type="button" id="btn-cancel" class="btn-ghost">取消</button>
+          <button type="submit" class="btn-primary">保存</button>
+        </div>
       </form>
-      <p id="greet-msg"></p>
-    </main>
+    </section>
   </body>
 </html>
