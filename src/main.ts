@@ -546,6 +546,9 @@ async function aiReview() {
 // ============ 入口:按窗口标签分发视图 ============
 
 const label = getCurrentWindow().label;
+
+// 所有窗口禁用浏览器默认右键菜单(带"检查"那个);横条/桌宠有自己的右键逻辑
+document.addEventListener("contextmenu", (e) => e.preventDefault());
 document.body.classList.add(label === "main" ? "view-main" : "view-alt");
 
 if (label === "timeline-bar") {

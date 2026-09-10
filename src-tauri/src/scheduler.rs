@@ -163,7 +163,7 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {TASK_COLS} FROM tasks WHERE status != 'done'
+            "SELECT {TASK_COLS} FROM tasks
              ORDER BY pinned DESC, priority DESC, id ASC"
         ))
         .map_err(|e| e.to_string())?;
@@ -204,11 +204,15 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
         match task.kind.as_str() {
             "recurring" => {
                 let Some(expr) = task.cron.as_deref() else {
-                    queued.push(task);
+                    if task.status != "done" {
+                        queued.push(task);
+                    }
                     continue;
                 };
                 let Ok(sched) = parse_cron(expr) else {
-                    queued.push(task);
+                    if task.status != "done" {
+                        queued.push(task);
+                    }
                     continue;
                 };
                 let mut placed = false;
@@ -227,7 +231,7 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
                         doing_log_id: None,
                     });
                 }
-                if !placed {
+                if !placed && task.status != "done" {
                     queued.push(task); // 今天没有发生点,也从现在往后排
                 }
             }
@@ -243,11 +247,15 @@ pub fn timeline_today(app: AppHandle) -> Result<Vec<Occurrence>, String> {
                         status: task.status.clone(),
                         doing_log_id: None,
                     });
-                } else {
+                } else if task.status != "done" {
                     queued.push(task); // 没定时间或不是今天:从现在往后排
                 }
             }
-            _ => queued.push(task),
+            _ => {
+                if task.status != "done" {
+                    queued.push(task);
+                }
+            }
         }
     }
 

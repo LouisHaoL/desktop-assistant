@@ -213,7 +213,11 @@ export function initBar() {
       const seg = document.createElement("div");
       seg.className = `bar-seg${o.kind === "once" ? " bar-seg-once" : ""}${
         o.status === "doing" ? " bar-seg-doing" : ""
-      }${o.start_minute < nowMinute() && o.status !== "doing" ? " bar-seg-queued" : ""}`;
+      }${o.status === "done" ? " bar-seg-done" : ""}${
+        o.status !== "doing" && o.status !== "done" && o.start_minute < nowMinute()
+          ? " bar-seg-queued"
+          : ""
+      }`;
       seg.style.left = `${(o.start_minute / MINUTES_PER_DAY) * 100}%`;
       seg.style.width = `${Math.max((o.duration_minutes / MINUTES_PER_DAY) * 100, 0.4)}%`;
       seg.style.top = `${4 + lane * 11}px`;
@@ -257,8 +261,15 @@ export function initBar() {
     panelEl.querySelector<HTMLElement>(".bar-panel-title")!.textContent = o.name;
     panelEl.querySelector<HTMLElement>(".bar-panel-meta")!.textContent =
       `${hhmm(o.start_minute)} - ${hhmm(o.start_minute + o.duration_minutes)} · 约 ${o.duration_minutes} 分钟` +
-      (o.status === "doing" ? " · 进行中" : "");
+      (o.status === "doing" ? " · 进行中" : o.status === "done" ? " · 已完成" : "");
     const actions = panelEl.querySelector<HTMLElement>(".bar-panel-actions")!;
+
+    const setStatus = async (status: string) => {
+      const tasks = await invoke<TaskRow[]>("task_list");
+      const t = tasks.find((x) => x.id === o.task_id);
+      if (!t) throw new Error("任务不存在");
+      await invoke("task_update", { task: { ...t, status } });
+    };
 
     const mkBtn = (text: string, fn: () => Promise<void>, danger = false) => {
       const b = document.createElement("button");
@@ -278,30 +289,33 @@ export function initBar() {
       actions.append(b);
     };
 
-    if (o.status !== "doing") {
-      mkBtn("▶ 开始", async () => {
-        await invoke("task_start", { id: o.task_id, source: "user" });
-      });
-    }
-    if (o.doingLogId != null) {
-      mkBtn("⏸ 暂停", async () => {
-        await invoke("task_pause", { logId: o.doingLogId });
-      });
-      mkBtn("✓ 完成", async () => {
-        await invoke("task_finish", { logId: o.doingLogId });
+    if (o.status === "done") {
+      mkBtn("↩ 恢复为待办", async () => {
+        await setStatus("todo");
       });
     } else {
-      // 没开始也可以直接标记完成
-      mkBtn(
-        "✓ 直接标记完成",
-        async () => {
-          const tasks = await invoke<TaskRow[]>("task_list");
-          const t = tasks.find((x) => x.id === o.task_id);
-          if (!t) throw new Error("任务不存在");
-          await invoke("task_update", { task: { ...t, status: "done" } });
-        },
-        true
-      );
+      if (o.status !== "doing") {
+        mkBtn("▶ 开始", async () => {
+          await invoke("task_start", { id: o.task_id, source: "user" });
+        });
+      }
+      if (o.doingLogId != null) {
+        mkBtn("⏸ 暂停", async () => {
+          await invoke("task_pause", { logId: o.doingLogId });
+        });
+        mkBtn("✓ 完成", async () => {
+          await invoke("task_finish", { logId: o.doingLogId });
+        });
+      } else {
+        // 没开始也可以直接标记完成
+        mkBtn(
+          "✓ 直接标记完成",
+          async () => {
+            await setStatus("done");
+          },
+          true
+        );
+      }
     }
     panelEl.hidden = false;
     // 面板贴着点击位置,尽量不出窗

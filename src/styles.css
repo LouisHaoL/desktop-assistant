@@ -742,6 +742,16 @@ input[type="datetime-local"]:focus, input[type="number"]:focus, input[type="pass
   box-shadow: 0 0 8px #fff6;
 }
 .bar-seg-queued { opacity: 0.55; }
+.bar-seg-done {
+  opacity: 0.45;
+  background-image: repeating-linear-gradient(
+    45deg,
+    #0000,
+    #0000 4px,
+    #ffffff2e 4px,
+    #ffffff2e 7px
+  );
+}
 
 /* 设置页:空闲提醒一行式 */
 .idle-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
